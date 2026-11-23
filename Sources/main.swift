@@ -673,7 +673,8 @@ final class StreamPlayer: NSObject, ObservableObject {
     // MARK: resume after restart (~/.touchbar-lyrics/queue.json; no credentials stored)
     static let queuePath = home + "/queue.json"
     func save() {
-        guard active else { try? FileManager.default.removeItem(atPath: StreamPlayer.queuePath); return }
+        // nothing loaded is NOT "queue cleared" (e.g. the login wasn't readable yet at launch): only stop() deletes it
+        guard active else { return }
         let pos = cur.currentTime().seconds
         let obj: [String: Any] = [
             "index": index, "position": pos.isFinite ? pos : 0, "shuffled": shuffled,
@@ -685,7 +686,14 @@ final class StreamPlayer: NSObject, ObservableObject {
         }
     }
     /// Load the saved queue paused at its old position (never starts playing by itself).
+    private var restoreRetries = 0
     func restore(force: Bool = false) {
+        // the Subsonic login comes from the Keychain, which may still be waiting on a permission prompt
+        if Subsonic.auth == nil, FileManager.default.fileExists(atPath: StreamPlayer.queuePath), restoreRetries < 60 {
+            restoreRetries += 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.restore(force: force) }
+            return
+        }
         guard cfg.resumeQueue || force, !active, let d = FileManager.default.contents(atPath: StreamPlayer.queuePath),
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let list = j["tracks"] as? [[String: Any]] else { return }
