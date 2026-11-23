@@ -1,0 +1,768 @@
+// Settings window (SwiftUI): behaviour, appearance, pinned playlists, Subsonic playlist manager, accounts.
+import SwiftUI
+import AppKit
+
+// MARK: - Window
+
+/// Settings now live in the main LyricsBar window (sidebar → Settings). This keeps the old entry points working.
+final class SettingsWindow {
+    static let shared = SettingsWindow()
+    func toggle() { LibraryWindow.shared.toggle(settings: true) }
+    func show(_ section: SettingsSection = .general) { LibraryWindow.shared.show(settings: section) }
+}
+
+enum SettingsSection: String, CaseIterable, Identifiable {
+    case general = "General", appearance = "Appearance", providers = "Providers"
+    case pinned = "Pinned Playlists", subsonic = "Subsonic Playlists"
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .general: return "gearshape"
+        case .appearance: return "paintbrush"
+        case .providers: return "square.stack.3d.up"
+        case .pinned: return "pin"
+        case .subsonic: return "music.note.list"
+        }
+    }
+}
+
+/// The settings page for a sidebar section.
+struct SettingsDetail: View {
+    let section: SettingsSection
+    var body: some View {
+        switch section {
+        case .general: GeneralPane()
+        case .appearance: AppearancePane()
+        case .providers: ProvidersPane()
+        case .pinned: PinnedPane()
+        case .subsonic: SubsonicPane()
+        }
+    }
+}
+
+// MARK: - Simple panes
+
+struct LabeledSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 0.01
+    var format: (Double) -> String = { String(format: "%.2f", $0) }
+    var body: some View {
+        LabeledContent(title) {
+            HStack {
+                Slider(value: $value, in: range, step: step)
+                Text(format(value)).monospacedDigit().frame(width: 56, alignment: .trailing).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct GeneralPane: View {
+    @ObservedObject var store = ConfigStore.shared
+    var secs: (Double) -> String = { String(format: "%.0fs", $0) }
+    var body: some View {
+        Form {
+            Section("Playback") {
+                Picker("When nothing is loaded, ▶ starts", selection: $store.c.defaultApp) {
+                    Text("Subsonic").tag("subsonic"); Text("Spotify").tag("spotify")
+                    Text("Apple Music").tag("applemusic"); Text("Nothing (open the picker)").tag("ask")
+                }
+                Text(store.c.defaultApp == "subsonic"
+                     ? "Resumes your last LyricsBar queue, or shuffles your Liked Songs."
+                     : "Also stops macOS from opening Apple Music when you press play with nothing loaded.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Shuffle Subsonic playlists by default", isOn: $store.c.defaultShuffle)
+                Toggle("Pause other players when starting a playlist", isOn: $store.c.pauseOthers)
+                Toggle("Resume the LyricsBar queue after a restart (paused)", isOn: $store.c.resumeQueue)
+                LabeledSlider(title: "Crossfade", value: $store.c.crossfadeSeconds, range: 0...12, step: 0.5,
+                              format: { $0 == 0 ? "Off" : String(format: "%.1fs", $0) })
+                Text("Fades between songs in Subsonic playlists played by LyricsBar. Other players use their own settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Lyrics gestures") {
+                Picker("Tap on lyrics", selection: $store.c.lyricTapAction) {
+                    Text("Play / Pause").tag("pause"); Text("Show controls").tag("controls"); Text("Nothing").tag("none")
+                }
+                Picker("Hold on lyrics", selection: $store.c.lyricHoldAction) {
+                    Text("Play / Pause").tag("pause"); Text("Show controls").tag("controls"); Text("Nothing").tag("none")
+                }
+                Text("Show controls opens the scrubber with play, skip and the queue. Swipe left or right to skip songs.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Auto-hide after") {
+                LabeledSlider(title: "Media controls", value: $store.c.mediaAutoHide, range: 3...30, step: 1, format: secs)
+                LabeledSlider(title: "Playlist picker", value: $store.c.pickerAutoHide, range: 5...60, step: 1, format: secs)
+                LabeledSlider(title: "Brightness / volume slider", value: $store.c.panelAutoHide, range: 2...20, step: 1, format: secs)
+            }
+            Section("App") {
+                Toggle("Show menu bar icon", isOn: $store.c.showMenuBarIcon)
+                LabeledContent("Lyrics service") {
+                    Button("Restart") { run("/bin/launchctl", ["kickstart", "-k", "gui/\(getuid())/com.crispy.touchbar-lyrics"]) }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("General")
+    }
+}
+
+struct LyricsSections: View {
+    @ObservedObject var store = ConfigStore.shared
+    var body: some View {
+        Group {
+            Section("Lyrics") {
+                LabeledSlider(title: "Font size", value: $store.c.lyricFontSize, range: 11...20, step: 0.5,
+                              format: { String(format: "%.1f pt", $0) })
+                Picker("Alignment", selection: $store.c.lyricAlignment) {
+                    Text("Left").tag("left"); Text("Centre").tag("center")
+                }
+                Picker("Line change", selection: $store.c.lyricTransition) {
+                    Text("Slide").tag("slide"); Text("Fade").tag("fade"); Text("None").tag("none")
+                }
+                Toggle("Show song title when there are no synced lyrics", isOn: $store.c.showTitleWhenNoLyrics)
+            }
+            Section("Lyrics timing") {
+                LabeledSlider(title: "Timing offset", value: $store.c.lyricOffset, range: -2...2, step: 0.05,
+                              format: { String(format: "%+.2fs", $0) })
+                Text("Positive shows each line earlier. Use it if lyrics feel late.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Title cards") {
+                LabeledSlider(title: "Song title card", value: $store.c.titleCardSeconds, range: 0...10, step: 0.5,
+                              format: { $0 == 0 ? "Off" : String(format: "%.1fs", $0) })
+                Text("When a new song starts, its title and artist show for this long before the lyrics.")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledSlider(title: "“Next” card before song ends", value: $store.c.outroSeconds, range: 0...20, step: 1,
+                              format: { $0 == 0 ? "Off" : String(format: "%.0fs", $0) })
+                Text("Near the end of a song its title comes back with the next song on the right, which slides in when the song changes.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct AppearancePane: View {
+    @ObservedObject var store = ConfigStore.shared
+    var color: Binding<Color> {
+        Binding(get: { Color(nsColor: NSColor(hex: store.c.solidColor) ?? .black) },
+                set: { store.c.solidColor = NSColor($0).hexString })
+    }
+    var body: some View {
+        Form {
+            Section("Background") {
+                Picker("Style", selection: $store.c.backgroundStyle) {
+                    Text("Wallpaper").tag("wallpaper")
+                    Text("Album art").tag("album")
+                    Text("Solid colour").tag("solid")
+                }
+                .pickerStyle(.segmented)
+                if store.c.backgroundStyle == "solid" {
+                    ColorPicker("Colour", selection: color, supportsOpacity: false)
+                } else {
+                    LabeledSlider(title: "Blur", value: $store.c.blurAmount, range: 0...40, step: 1,
+                                  format: { String(format: "%.0f", $0) })
+                    LabeledSlider(title: "Brightness", value: $store.c.targetBrightness, range: 0.05...0.6)
+                    LabeledSlider(title: "Saturation", value: $store.c.saturation, range: 0...2.5)
+                }
+                LabeledSlider(title: "Darken", value: $store.c.dimAmount, range: 0...0.7)
+                if store.c.backgroundStyle == "album" {
+                    Text("Uses the current song's cover, blurred. Falls back to your wallpaper when there's no artwork.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            LyricsSections()
+            VisualizerSections()
+            Section("Buttons") {
+                Picker("Style", selection: $store.c.buttonStyle) {
+                    Text("Minimal").tag("minimal"); Text("Pill").tag("pill")
+                }
+                .pickerStyle(.segmented)
+                Toggle("Brightness", isOn: $store.c.showBrightness)
+                Toggle("Volume", isOn: $store.c.showVolume)
+                Toggle("Library", isOn: $store.c.showApps)
+            }
+            Section("Extras") {
+                Toggle("Song progress line along the bottom edge", isOn: $store.c.showProgress)
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Appearance")
+    }
+}
+
+struct VisualizerSections: View {
+    @ObservedObject var store = ConfigStore.shared
+    var body: some View {
+        Group {
+            Section("Visualizer") {
+                Picker("Style", selection: $store.c.visualizerStyle) {
+                    Text("Off").tag("off"); Text("Behind lyrics").tag("background"); Text("Compact").tag("compact")
+                }
+                .pickerStyle(.segmented)
+                Text("Behind lyrics: faint bars across the whole bar. Compact: a small equalizer next to the album art.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if store.c.visualizerStyle != "off" {
+                Section {
+                    Picker("Colour", selection: $store.c.visualizerColor) {
+                        Text("White").tag("white"); Text("From album art").tag("album")
+                    }
+                    LabeledSlider(title: "Sensitivity", value: $store.c.visualizerSensitivity, range: 0.4...2.5)
+                    if store.c.visualizerStyle == "background" {
+                        LabeledSlider(title: "Opacity", value: $store.c.visualizerOpacity, range: 0.05...0.8)
+                    }
+                }
+                Section {
+                    Text("The visualizer listens to your Mac's audio output (macOS asks once for “system audio recording” permission). Audio is analysed on the fly and never stored. It only runs while music is playing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+
+// MARK: - Pinned playlists
+
+struct PlaylistRow: Identifiable, Hashable { let id: String; let name: String; let count: Int }
+
+func loadPlaylists(_ provider: String) async -> Result<[PlaylistRow], Error> {
+    if provider == "subsonic" {
+        do { return .success(try await Subsonic.playlists().map { PlaylistRow(id: $0.id, name: $0.name, count: $0.songCount) }) }
+        catch { return .failure(error) }
+    }
+    return await withCheckedContinuation { cont in
+        libraryJSON(["playlists", provider]) { obj, err in
+            if let list = obj as? [[String: Any]] {
+                cont.resume(returning: .success(list.map {
+                    PlaylistRow(id: $0["id"] as? String ?? "", name: $0["name"] as? String ?? "?",
+                                count: ($0["count"] as? NSNumber)?.intValue ?? 0)
+                }))
+            } else {
+                cont.resume(returning: .failure(SubsonicError(message: (err ?? "").contains("isn't connected")
+                    ? "Spotify isn't connected. Connect it under Providers." : (err ?? "Couldn't load playlists"))))
+            }
+        }
+    }
+}
+
+struct PinnedPane: View {
+    @ObservedObject var store = ConfigStore.shared
+    @State var provider = "subsonic"
+    @State var rows: [PlaylistRow] = []
+    @State var error: String?
+    @State var loading = false
+
+    var body: some View {
+        VSplitView {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Pinned — shown first when you tap the album art. Drag to reorder.")
+                    .font(.callout).foregroundStyle(.secondary)
+                List {
+                    ForEach(store.c.pinned) { p in
+                        HStack {
+                            Image(systemName: "pin.fill").foregroundStyle(.orange)
+                            Text(p.name)
+                            Spacer()
+                            Text(p.provider.capitalized).foregroundStyle(.secondary)
+                            Button { store.c.pinned.removeAll { $0.id == p.id } } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.borderless).foregroundStyle(.secondary)
+                        }
+                    }
+                    .onMove { store.c.pinned.move(fromOffsets: $0, toOffset: $1) }
+                    if store.c.pinned.isEmpty {
+                        Text("Nothing pinned yet — pick some below.").foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding()
+            .frame(minHeight: 160)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Picker("", selection: $provider) {
+                        Text("Subsonic").tag("subsonic")
+                        Text("Spotify").tag("spotify")
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(width: 220)
+                    if loading { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Button { Task { await reload() } } label: { Image(systemName: "arrow.clockwise") }
+                }
+                if let error { Text(error).foregroundStyle(.red) }
+                List(rows) { r in
+                    HStack {
+                        Text(r.name)
+                        if r.count > 0 { Text("\(r.count) songs").foregroundStyle(.secondary) }
+                        Spacer()
+                        let pinned = store.isPinned(provider, r.id)
+                        Button(pinned ? "Unpin" : "Pin") { store.togglePin(provider, r.id, r.name) }
+                            .buttonStyle(.bordered).tint(pinned ? .orange : nil)
+                    }
+                }
+            }
+            .padding()
+            .frame(minHeight: 200)
+        }
+        .navigationTitle("Pinned Playlists")
+        .task(id: provider) { await reload() }
+    }
+
+    @MainActor func reload() async {
+        loading = true; error = nil
+        switch await loadPlaylists(provider) {
+        case .success(let r): rows = r
+        case .failure(let e): rows = []; error = e.localizedDescription
+        }
+        loading = false
+    }
+}
+
+// MARK: - Subsonic playlist manager
+
+@MainActor final class SubsonicManager: ObservableObject {
+    @Published var playlists: [SPlaylist] = []
+    @Published var selected: String?
+    @Published var songs: [SSong] = []
+    @Published var results: [SSong] = []
+    @Published var error: String?
+    @Published var busy = false
+
+    func run(_ work: @escaping () async throws -> Void) {
+        Task {
+            busy = true; error = nil
+            do { try await work() } catch { self.error = error.localizedDescription }
+            busy = false
+        }
+    }
+
+    func reloadPlaylists() {
+        run {
+            self.playlists = try await Subsonic.playlists()
+            if self.selected == nil { self.selected = self.playlists.first?.id }
+        }
+    }
+    func reloadSongs() {
+        guard let id = selected else { songs = []; return }
+        run { self.songs = try await Subsonic.playlist(id).1 }
+    }
+    func create(_ name: String) {
+        run { try await Subsonic.create(name); self.playlists = try await Subsonic.playlists()
+              self.selected = self.playlists.last { $0.name == name }?.id }
+    }
+    func rename(_ id: String, _ name: String) {
+        run { try await Subsonic.rename(id, name); self.playlists = try await Subsonic.playlists()
+              ConfigStore.shared.c.pinned = ConfigStore.shared.c.pinned.map {
+                  $0.provider == "subsonic" && $0.playlistId == id ? PinnedPlaylist(provider: "subsonic", playlistId: id, name: name) : $0 } }
+    }
+    func delete(_ id: String) {
+        run { try await Subsonic.delete(id); self.selected = nil; self.songs = []
+              ConfigStore.shared.c.pinned.removeAll { $0.provider == "subsonic" && $0.playlistId == id }
+              self.playlists = try await Subsonic.playlists() }
+    }
+    func remove(_ offsets: IndexSet) {
+        guard let id = selected else { return }
+        run { try await Subsonic.remove(id, indexes: Array(offsets)); self.songs = try await Subsonic.playlist(id).1
+              self.playlists = try await Subsonic.playlists() }
+    }
+    func move(_ from: IndexSet, _ to: Int) {
+        guard let id = selected else { return }
+        songs.move(fromOffsets: from, toOffset: to)
+        let ids = songs.map(\.id)
+        run { try await Subsonic.setSongs(id, ids) }
+    }
+    func add(_ s: SSong) {
+        guard let id = selected else { return }
+        run { try await Subsonic.add(id, songs: [s.id]); self.songs = try await Subsonic.playlist(id).1
+              self.playlists = try await Subsonic.playlists() }
+    }
+    func search(_ q: String) {
+        guard !q.trimmingCharacters(in: .whitespaces).isEmpty else { results = []; return }
+        run { self.results = try await Subsonic.search(q) }
+    }
+}
+
+func mmss(_ s: Int) -> String {
+    s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+}
+
+struct SubsonicPane: View {
+    @StateObject var m = SubsonicManager()
+    @ObservedObject var store = ConfigStore.shared
+    @State var query = ""
+    @State var nameDraft = ""
+    @State var showNew = false
+    @State var showRename = false
+    @State var confirmDelete = false
+
+    var current: SPlaylist? { m.playlists.first { $0.id == m.selected } }
+
+    var body: some View {
+        Group {
+            if Subsonic.auth == nil {
+                ContentUnavailableView("Subsonic isn't connected", systemImage: "server.rack",
+                                       description: Text("Sign in under Providers first."))
+            } else {
+                HSplitView {
+                    playlistList.frame(minWidth: 200, idealWidth: 230, maxWidth: 320)
+                    detail.frame(minWidth: 380)
+                }
+            }
+        }
+        .navigationTitle("Edit Playlists")
+        .toolbar {
+            if m.busy { ProgressView().controlSize(.small) }
+            Button { m.reloadPlaylists(); m.reloadSongs() } label: { Image(systemName: "arrow.clockwise") }
+        }
+        .onAppear { if Subsonic.auth != nil { m.reloadPlaylists() } }
+        .onChange(of: m.selected) { m.reloadSongs() }
+        .alert("New playlist", isPresented: $showNew) {
+            TextField("Name", text: $nameDraft)
+            Button("Create") { m.create(nameDraft) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename playlist", isPresented: $showRename) {
+            TextField("Name", text: $nameDraft)
+            Button("Rename") { if let id = m.selected { m.rename(id, nameDraft) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete “\(current?.name ?? "")” from your server?", isPresented: $confirmDelete) {
+            Button("Delete", role: .destructive) { if let id = m.selected { m.delete(id) } }
+        }
+    }
+
+    var playlistList: some View {
+        VStack(spacing: 0) {
+            List(m.playlists, selection: $m.selected) { p in
+                HStack {
+                    if store.isPinned("subsonic", p.id) { Image(systemName: "pin.fill").foregroundStyle(.orange).font(.caption) }
+                    Text(p.name)
+                    Spacer()
+                    Text("\(p.songCount)").foregroundStyle(.secondary).monospacedDigit()
+                }
+                .tag(p.id)
+                .contextMenu {
+                    Button(store.isPinned("subsonic", p.id) ? "Unpin" : "Pin") { store.togglePin("subsonic", p.id, p.name) }
+                    Button("Rename…") { m.selected = p.id; nameDraft = p.name; showRename = true }
+                    Button("Delete…", role: .destructive) { m.selected = p.id; confirmDelete = true }
+                }
+            }
+            HStack {
+                Button { nameDraft = ""; showNew = true } label: { Image(systemName: "plus") }
+                Button { confirmDelete = true } label: { Image(systemName: "minus") }.disabled(m.selected == nil)
+                Spacer()
+            }
+            .buttonStyle(.borderless).padding(8)
+        }
+    }
+
+    var detail: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let p = current {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(p.name).font(.title2.bold()).lineLimit(1).truncationMode(.tail)
+                        Text("\(p.songCount) songs · \(mmss(p.duration))").foregroundStyle(.secondary)
+                    }
+                    .layoutPriority(1)
+                    Spacer()
+                    Button { store.togglePin("subsonic", p.id, p.name) } label: {
+                        Label(store.isPinned("subsonic", p.id) ? "Pinned" : "Pin",
+                              systemImage: store.isPinned("subsonic", p.id) ? "pin.fill" : "pin")
+                    }
+                    Button("Rename…") { nameDraft = p.name; showRename = true }
+                }
+                if let e = m.error { Text(e).foregroundStyle(.red) }
+                List {
+                    ForEach(Array(m.songs.enumerated()), id: \.element.uid) { i, s in
+                        HStack {
+                            Text("\(i + 1)").foregroundStyle(.secondary).monospacedDigit().frame(width: 28, alignment: .trailing)
+                            VStack(alignment: .leading) {
+                                Text(s.title)
+                                Text("\(s.artist) — \(s.album)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(mmss(s.duration)).foregroundStyle(.secondary).monospacedDigit()
+                        }
+                        .contextMenu { Button("Remove from playlist", role: .destructive) { m.remove(IndexSet(integer: i)) } }
+                    }
+                    .onMove { m.move($0, $1) }
+                    .onDelete { m.remove($0) }
+                }
+                .frame(minHeight: 180)
+                Text("Drag to reorder · right-click a song to remove it").font(.caption).foregroundStyle(.secondary)
+                Divider()
+                HStack {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search your library to add songs…", text: $query)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { m.search(query) }
+                }
+                if !m.results.isEmpty {
+                    List(m.results, id: \.uid) { s in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                Text(s.title)
+                                Text("\(s.artist) — \(s.album)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button { m.add(s) } label: { Image(systemName: "plus.circle.fill") }.buttonStyle(.borderless)
+                        }
+                    }
+                    .frame(minHeight: 120, maxHeight: 200)
+                }
+            } else {
+                ContentUnavailableView("No playlist selected", systemImage: "music.note.list")
+            }
+        }
+        .padding()
+    }
+}
+
+// MARK: - Accounts
+
+struct AccountsSections: View {
+    var changed: () -> Void = {}
+    @State var server = Subsonic.auth?.server ?? ""
+    @State var user = Subsonic.auth?.u ?? ""
+    @State var password = ""
+    @State var subStatus = Subsonic.auth == nil ? "Not connected" : "Connected"
+    @State var subBusy = false
+    @State var clientId = AccountsSections.spotifyClientId() ?? ""
+    @State var spStatus = AccountsSections.spotifyClientId() == nil ? "Not connected" : "Connected"
+    @State var spBusy = false
+
+    static func spotifyClientId() -> String? {
+        Creds.get("spotify")?["client_id"]
+    }
+
+    var body: some View {
+        Group {
+            Section("Subsonic account") {
+                LabeledContent("Status", value: subStatus)
+                TextField("Server", text: $server, prompt: Text("https://music.example.com"))
+                TextField("Username", text: $user)
+                SecureField("Password", text: $password)
+                HStack {
+                    Button("Sign In") { subsonic { try await Subsonic.login(server: server, user: user, password: password) } }
+                        .disabled(server.isEmpty || user.isEmpty || password.isEmpty)
+                    if subBusy { ProgressView().controlSize(.small) }
+                }
+                Text("Only a salted token is saved, in your login Keychain. Your password is never stored.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Spotify account") {
+                LabeledContent("Status", value: spStatus)
+                TextField("Client ID", text: $clientId)
+                HStack {
+                    Button(spStatus == "Connected" ? "Reconnect" : "Connect") { connectSpotify() }.disabled(clientId.isEmpty || spBusy)
+                    Button("Disconnect") {
+                        Creds.set("spotify", nil); spStatus = "Not connected"; changed()
+                    }
+                    if spBusy { ProgressView().controlSize(.small) }
+                }
+                Text("Create an app at developer.spotify.com with redirect URI http://127.0.0.1:8898/callback. Reconnect once to enable Up Next for Spotify.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    func subsonic(_ work: @escaping () async throws -> Void) {
+        subBusy = true
+        Task { @MainActor in
+            do {
+                try await work()
+                subStatus = "Connected"; password = ""
+                server = Subsonic.auth?.server ?? server; user = Subsonic.auth?.u ?? user
+                changed()
+            } catch { subStatus = "Failed: \(error.localizedDescription)" }
+            subBusy = false
+        }
+    }
+
+    func connectSpotify() {
+        spBusy = true; spStatus = "Waiting for you to approve in the browser…"
+        let id = clientId.trimmingCharacters(in: .whitespaces)
+        DispatchQueue.global().async {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            p.arguments = ["-I", home + "/library.py", "spotify-login", id]
+            let pipe = Pipe(), input = Pipe()
+            p.standardOutput = pipe; p.standardError = pipe; p.standardInput = input
+            try? p.run()
+            try? input.fileHandleForWriting.close()          // nothing to send; new tokens come back on stdout
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            p.waitUntilExit()
+            let last = out.split(separator: "\n").last.map(String.init) ?? ""
+            let j = (try? JSONSerialization.jsonObject(with: Data(last.utf8))) as? [String: Any]
+            if p.terminationStatus == 0, let j { Creds.absorb(fromHelper: j) }
+            DispatchQueue.main.async {
+                spBusy = false
+                spStatus = p.terminationStatus == 0 && Creds.get("spotify") != nil ? "Connected" : "Failed: " + last
+                changed()
+            }
+        }
+    }
+}
+
+// MARK: - Colour helpers
+
+extension NSColor {
+    convenience init?(hex: String) {
+        var s = hex.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+        self.init(srgbRed: CGFloat((v >> 16) & 0xff) / 255, green: CGFloat((v >> 8) & 0xff) / 255,
+                  blue: CGFloat(v & 0xff) / 255, alpha: 1)
+    }
+    var hexString: String {
+        let c = usingColorSpace(.sRGB) ?? self
+        return String(format: "#%02X%02X%02X", Int(round(c.redComponent * 255)),
+                      Int(round(c.greenComponent * 255)), Int(round(c.blueComponent * 255)))
+    }
+}
+
+
+// MARK: - Providers
+
+struct ProvidersPane: View {
+    @ObservedObject var store = ConfigStore.shared
+    @State private var rev = 0      // bumps after sign-in so the status badges refresh
+    var body: some View {
+        Form {
+            Section {
+                row("Subsonic", icon: "server.rack", on: $store.c.showSubsonic,
+                    status: Subsonic.auth.map { "Signed in as \($0.u)" } ?? "Not signed in", ready: Subsonic.auth != nil,
+                    detail: "Streams your server's playlists in LyricsBar (crossfade, editable queue, Liked Songs).")
+                row("Spotify", icon: "dot.radiowaves.left.and.right", on: $store.c.showSpotify,
+                    status: Creds.get("spotify") != nil ? "Connected" : "Not connected",
+                    ready: Creds.get("spotify") != nil,
+                    detail: "Lists your playlists and Liked Songs; plays them in the Spotify app.")
+                row("Apple Music", icon: "music.note", on: $store.c.showAppleMusic,
+                    status: FileManager.default.fileExists(atPath: "/System/Applications/Music.app") ? "Uses the Music app" : "Not installed",
+                    ready: FileManager.default.fileExists(atPath: "/System/Applications/Music.app"),
+                    detail: "Lists your Music playlists and plays them in the Music app. macOS asks once to let LyricsBar control Music.")
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "waveform").frame(width: 22).foregroundStyle(.tertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("TIDAL").foregroundStyle(.secondary)
+                        Text("Not available: the TIDAL Mac app can't be controlled by other apps. Lyrics and controls still work while it plays.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Toggle("", isOn: .constant(false)).labelsHidden().disabled(true)
+                }
+            } header: {
+                Text("Shown in the Touch Bar picker").id(rev)
+            } footer: {
+                Text("Lyrics, the album art and media controls work with any player, whether or not it's listed here.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ScrobbleSections()
+            AccountsSections(changed: { rev += 1 })
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Providers")
+    }
+
+    func row(_ name: String, icon: String, on: Binding<Bool>, status: String, ready: Bool, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon).frame(width: 22).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(name)
+                    Text(status).font(.caption)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background((ready ? Color.green : Color.orange).opacity(0.18), in: SwiftUI.Capsule())
+                        .foregroundStyle(ready ? .green : .orange)
+                }
+                Text(detail).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Toggle("", isOn: on).labelsHidden()
+        }
+    }
+}
+
+
+// MARK: - Scrobbling
+
+struct ScrobbleSections: View {
+    @ObservedObject var store = ConfigStore.shared
+    @State private var lfKey = LastFM.creds?["api_key"] ?? ""
+    @State private var lfSecret = ""
+    @State private var lfUser = LastFM.user
+    @State private var lfStatus = ""
+    @State private var lfBusy = false
+    @State private var lbToken = ""
+    @State private var lbUser = ListenBrainz.user
+    @State private var lbStatus = ""
+    @State private var lbBusy = false
+
+    var body: some View {
+        Group {
+            Section {
+                Text("You can scrobble either way: let Navidrome forward your plays (link Last.fm / ListenBrainz in Navidrome under your profile → Personal settings), or have LyricsBar send them directly below. Pick one per service; doing both counts every song twice. Either way a song counts after you've heard half of it or 4 minutes. This covers songs played by LyricsBar; Spotify can scrobble through Last.fm's own Spotify connection.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Report plays to your Subsonic server", isOn: $store.c.reportPlays)
+                Text("Updates Navidrome's play counts and Recently Played, and forwards to any services linked there.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: { Text("Scrobbling") }
+
+            Section("Last.fm (direct)") {
+                if let u = lfUser {
+                    LabeledContent("Account", value: u)
+                    Toggle("Scrobble to Last.fm", isOn: $store.c.scrobbleLastfm)
+                    Button("Disconnect") { LastFM.disconnect(); lfUser = nil; store.c.scrobbleLastfm = false }
+                } else {
+                    TextField("API key", text: $lfKey)
+                    SecureField("Shared secret", text: $lfSecret)
+                    HStack {
+                        Button("Connect…") { connectLastfm() }.disabled(lfKey.isEmpty || lfSecret.isEmpty || lfBusy)
+                        if lfBusy { ProgressView().controlSize(.small) }
+                        if !lfStatus.isEmpty { Text(lfStatus).font(.caption).foregroundStyle(.secondary) }
+                    }
+                    Text("Create an API account at last.fm/api/account/create (any name; leave the callback URL empty), paste its key and secret, then approve LyricsBar in the browser.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            Section("ListenBrainz (direct)") {
+                if let u = lbUser {
+                    LabeledContent("Account", value: u)
+                    Toggle("Scrobble to ListenBrainz", isOn: $store.c.scrobbleListenBrainz)
+                    Button("Disconnect") { ListenBrainz.disconnect(); lbUser = nil; store.c.scrobbleListenBrainz = false }
+                } else {
+                    SecureField("User token", text: $lbToken)
+                    HStack {
+                        Button("Connect") { connectListenBrainz() }.disabled(lbToken.isEmpty || lbBusy)
+                        if lbBusy { ProgressView().controlSize(.small) }
+                        if !lbStatus.isEmpty { Text(lbStatus).font(.caption).foregroundStyle(.secondary) }
+                    }
+                    Text("Copy your token from listenbrainz.org/settings.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    func connectLastfm() {
+        lfBusy = true; lfStatus = "Approve LyricsBar in your browser…"
+        let k = lfKey.trimmingCharacters(in: .whitespaces), s = lfSecret.trimmingCharacters(in: .whitespaces)
+        Task { @MainActor in
+            do { lfUser = try await LastFM.connect(apiKey: k, secret: s); lfStatus = ""; lfSecret = ""; store.c.scrobbleLastfm = true }
+            catch { lfStatus = error.localizedDescription }
+            lfBusy = false
+        }
+    }
+    func connectListenBrainz() {
+        lbBusy = true; lbStatus = ""
+        let t = lbToken.trimmingCharacters(in: .whitespaces)
+        Task { @MainActor in
+            do { lbUser = try await ListenBrainz.connect(token: t); lbToken = ""; store.c.scrobbleListenBrainz = true }
+            catch { lbStatus = error.localizedDescription }
+            lbBusy = false
+        }
+    }
+}

@@ -1,0 +1,12 @@
+build/
+*.app/
+.DS_Store
+# personal data lives in ~/.touchbar-lyrics, never in the repo
+config.json
+state.json
+queue.json
+scrobble-queue.json
+cache/
+*.log
+*.pem
+*.p12

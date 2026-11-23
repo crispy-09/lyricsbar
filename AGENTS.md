@@ -1,0 +1,91 @@
+# AGENTS.md
+
+Notes for coding agents (and humans) working on LyricsBar.
+
+## Layout
+
+- `Sources/main.swift`: the app entry point.
+  - **Touch Bar layer:** private DFR calls, `App` (the app delegate) and `BarView` (the whole Touch Bar UI).
+  - **`StreamPlayer`:** the built-in Subsonic player, with two AVPlayers for crossfade, a uid-based queue and `queue.json` persistence.
+  - **Helpers:** transport routing (`transport()` / `ownPlayerInCharge()`), `LikedCache`, `ScrubBar` and the picker (`TBPicker`).
+- `Sources/TouchQueue.swift`: the layer-based Up Next strip (fling, hold-drag reorder, trash), plus `LyricTouchArea` and `SlideOverlay`.
+- `Sources/Library.swift`: the main window, with SwiftUI `NavigationSplitView`.
+  - The sidebar mixes library sections and Settings sections (`SidebarItem`).
+  - `LibraryWindow.toggle(settings:)` backs the 📚 button and the hold on the album art.
+- `Sources/Settings.swift`: the Settings panes (General, Appearance, Providers, Pinned, Edit Playlists). `SettingsWindow` is now just a shim onto `LibraryWindow`.
+- `Sources/Config.swift`: `Config` (Codable) is stored in `~/.touchbar-lyrics/config.json`. `lyricsd.py` reads it too.
+  - New fields need a default value; `Config.load()` merges the file over the defaults.
+- `Sources/Subsonic.swift`: the Subsonic API client.
+  - Use `txt()` for every user-visible string; it decodes HTML entities that some servers leave in.
+- `Sources/Keychain.swift`: `Creds`, one login-Keychain item (service `com.crispy.lyricsbar`, account `credentials`) holding JSON with the `subsonic`, `spotify`, `lastfm` and `listenbrainz` entries.
+- `Sources/Scrobble.swift`: Last.fm and ListenBrainz clients, plus the `ScrobbleQueue` actor (persisted retry queue).
+- `Sources/Visualizer.swift`: `AudioTap` (FFT into band levels) and `VisualizerView`. The audio source is:
+  - LyricsBar's own player: `MTAudioProcessingTap` on each `AVPlayerItem`
+  - other apps: a Core Audio process tap on that app's processes
+  - fallback: a whole-system tap
+- `scripts/lyricsd.py`: the lyrics daemon.
+  - It runs `media-control stream`, then writes `state.json`, `artwork.jpg` and `current.txt` (the current lyric line).
+  - It caches LRC in `cache/<md5(artist|title)>.json`.
+- `scripts/library.py`: the playlist CLI the app calls.
+  - It gets credentials as JSON on **stdin** and returns refreshed tokens as `{"__result": …, "__creds": …}`.
+  - It must never write credentials to disk.
+
+## Build and run
+
+```sh
+./build.sh "$HOME/Applications/LyricsBar Beta.app"   # build into the Beta slot
+~/.touchbar-lyrics/switch.sh beta                     # run it (the LaunchAgent follows the symlink)
+launchctl kickstart -k gui/$(id -u)/com.crispy.lyricsbar   # restart
+```
+
+- When calling `swiftc` by hand, list the files explicitly or use a glob. zsh does not word-split `$VARS`.
+- Pass `LYRICSBAR_SIGN_ID` to sign with a stable identity. Every new build changes the code hash, so the Keychain asks once per build. **The app blocks at launch until that dialog is answered.** Check with `pgrep -l SecurityAgent`.
+- Batch changes before rebuilding; every build means another Keychain prompt for the user.
+
+## Testing without a finger
+
+The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then send `pkill -HUP -x LyricsBar`. Most commands write their output to `~/.touchbar-lyrics/debug.out`.
+
+| Command | Effect |
+| --- | --- |
+| `menu`, `pick N` | Open the picker, choose item N |
+| `media` | Show the media controls |
+| `apps` | Press the 📚 button |
+| `arthold` | Hold the album art |
+| `library <Section>` | Open a Library section (`Up Next`, `Lyrics`, `Search`, `Liked Songs`, `Albums`, `Artists`, `Playlists`, `Spotify`) |
+| `settings <Section>` | Open a Settings section (`General`, `Appearance`, `Providers`, `Pinned Playlists`, `Subsonic Playlists`) |
+| `qstate` | Write the queue state |
+| `viz` | Write the visualizer frames and levels |
+| `toast <text>`, `text <s>`, `qpreview` | UI checks |
+| `mutedtest` | Muted playback self-test (play, next, seek, crossfade, previous, pause, restore). No sound, no scrobbles; the log goes to `debug.out` |
+
+Other signals: `SIGUSR1` toggles the media controls and `SIGUSR2` opens the volume slider.
+
+Screenshots:
+- Touch Bar: `screencapture -b out.png`
+- Windows: `screencapture -o -l <windowID>`
+
+**Gotchas:**
+
+- **Never loop `pkill -HUP`** while the app may be (re)starting. A SIGHUP that arrives before the handler is installed kills it (exit 129), and launchd crash-loops.
+- **Don't drive playback through `transport()` in tests.** It controls whichever app is Now Playing, which could be the user's Spotify or Music. Call `StreamPlayer` directly with `testMuted = true` (as `mutedtest` does).
+- **Don't start audible playback** or send real scrobbles without asking the user.
+
+## Touch Bar quirks
+
+- `NSButton.contentTintColor` is ignored on the Touch Bar. Use `coloredSymbol(name, size, color)`, which bakes the colour in with `isTemplate = false`.
+- Touches only carry horizontal movement. There's no vertical swipe information.
+- The system-modal window is 1004pt wide but `BarView` is 1000pt. `BarView.layout()` compensates so centred lyrics stay centred.
+- macOS only lists an app as Now Playing after it has produced sound. Until then, `App.useOwnPlayerFallback()` drives the bar from `StreamPlayer` directly. The Library footer does the same thing.
+- An accessory app needs an Edit menu in `NSApp.mainMenu` for ⌘V to work in text fields (`installMainMenu()`).
+
+## Security rules
+
+- Credentials go **only** through `Creds` (Keychain). Never write them to files, logs, `NSLog`, process arguments or environment variables.
+- Subsonic URLs contain the auth token (`t`/`s` query parameters).
+  - Keep `URLCache` memory-only.
+  - Don't log those URLs.
+  - Don't persist them; `queue.json` stores cover IDs, not URLs.
+- Files in `~/.touchbar-lyrics` must not contain secrets. The directory is mode 700.
+- Build AppleScript and Spotify URIs only from sanitised IDs (`spotifySafe()`), never from raw names.
+- Never commit anything from `~/.touchbar-lyrics`: config, queue, state, cache, logs, or signing keys.
