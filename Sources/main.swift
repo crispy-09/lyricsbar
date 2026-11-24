@@ -1211,7 +1211,7 @@ final class BarView: NSView {
             guard let self else { return }
             if self.stripIsSpotify {
                 SpotifyQueue.shared.clear { err in
-                    if let err { self.toast(err, seconds: 3) }
+                    if let err { self.toast(err, seconds: 3); self.syncSpotifyStrip() }   // put the songs back
                     else { self.toast(SpotifyQueue.shared.pending ? "Cleared. Spotify stops after this song" : "Cleared Up Next", seconds: 2) }
                 }
                 self.queueStrip.entries = []
@@ -1810,10 +1810,16 @@ final class BarView: NSView {
         let dropped = SpotifyQueue.shared.pending
         SpotifyQueue.shared.cancelPending()
         toast("Queuing \(name)…" + (dropped ? " (unsaved Up Next changes dropped)" : ""), seconds: 6)
-        libraryJSON(["spotify-queue-playlist", spotifySafe(id)]) { [weak self] obj, err in
+        let pid = id.hasSuffix(":collection") ? "spotify:collection" : spotifySafe(id)   // Liked Songs
+        libraryJSON(["spotify-queue-playlist", pid]) { [weak self] obj, err in
             guard let self else { return }
-            if let n = (obj as? [String: Any])?["queued"] as? Int {
-                self.toast(n == 0 ? "\(name) is empty" : "Queued \(name) (\(n) songs)", seconds: 2.5)
+            let r = obj as? [String: Any]
+            if let n = r?["queued"] as? Int {
+                if let e = r?["error"] as? String {          // stopped partway (e.g. rate limited)
+                    self.toast("Queued \(n) of \(r?["total"] as? Int ?? n) songs from \(name): \(SpotifyQueue.friendly(e))", seconds: 5)
+                } else {
+                    self.toast(n == 0 ? "\(name) is empty" : "Queued \(name) (\(n) songs)", seconds: 2.5)
+                }
                 SpotifyQueue.shared.refresh()
             } else {
                 self.toast(SpotifyQueue.friendly(err), seconds: 4)
@@ -2108,6 +2114,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         URLCache.shared = URLCache(memoryCapacity: 48 << 20, diskCapacity: 0)
         URLCache.shared.removeAllCachedResponses()
         signal(SIGPIPE, SIG_IGN)          // a helper that exits before reading stdin must not kill the app
+        // Spotify Up Next edits that were waiting for a song's end when LyricsBar quit (once Now Playing is known)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { SpotifyQueue.shared.restorePending() }
         NotificationCenter.default.addObserver(forName: .lyricsBarToast, object: nil, queue: .main) { [weak self] n in
             if let t = n.object as? String { self?.view.toast(t, seconds: 3) }
         }
@@ -2277,7 +2285,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         let m = NSMenu()
         m.addItem(withTitle: "Library…", action: #selector(openLibrary), keyEquivalent: "l").target = self
         // only offer the switch when the other version is actually installed
-        let other = NSHomeDirectory() + "/Applications/" + (isBeta ? "LyricsBar Stable.app" : "LyricsBar Beta.app")
+        let other = NSHomeDirectory() + "/Applications/" + (isBeta ? "LyricsBar.app" : "LyricsBar Beta.app")
         if FileManager.default.fileExists(atPath: other) {
             m.addItem(withTitle: isBeta ? "Switch to Stable Version" : "Switch to Beta Version",
                       action: #selector(switchVersion), keyEquivalent: "").target = self
@@ -2289,18 +2297,19 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         s.menu = m
         statusItem = s
     }
-    /// ~/Applications/LyricsBar.app is a symlink to "LyricsBar Stable.app" or "LyricsBar Beta.app".
+    /// The LaunchAgent runs ~/.touchbar-lyrics/active.app, a link to ~/Applications/LyricsBar.app (stable)
+    /// or ~/Applications/LyricsBar Beta.app.
     var isBeta: Bool { Bundle.main.bundleURL.resolvingSymlinksInPath().lastPathComponent.contains("Beta") }
     @objc func switchVersion() {
-        let apps = NSHomeDirectory() + "/Applications/"
-        let target = isBeta ? "LyricsBar Stable.app" : "LyricsBar Beta.app"
-        guard FileManager.default.fileExists(atPath: apps + target) else { return }
+        let target = NSHomeDirectory() + "/Applications/" + (isBeta ? "LyricsBar.app" : "LyricsBar Beta.app")
+        guard FileManager.default.fileExists(atPath: target) else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/ln")
-        p.arguments = ["-sfn", target, apps + "LyricsBar.app"]
+        p.arguments = ["-sfn", target, home + "/active.app"]
         try? p.run(); p.waitUntilExit()
+        guard p.terminationStatus == 0 else { return }
         StreamPlayer.shared.save()
-        exit(0)      // launchd (KeepAlive) relaunches through the symlink → the other version
+        exit(0)      // launchd (KeepAlive) relaunches through the link → the other version
     }
 
     @objc func openLibrary() { LibraryWindow.shared.show() }

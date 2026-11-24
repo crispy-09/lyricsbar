@@ -4,7 +4,7 @@
 // That would interrupt the current song, so while Spotify plays, edits are shown straight away but only
 // sent in the last moments of the song (`pending`), and then start the new list in place of the next song.
 // While paused they're sent at once (silently, keeping the current song and its position). Needs Spotify Premium and the user-modify-playback-state scope.
-import Foundation
+import AppKit
 
 final class SpotifyQueue: ObservableObject {
     static let shared = SpotifyQueue()
@@ -158,6 +158,7 @@ final class SpotifyQueue: ObservableObject {
                 pausedSince = nil; changedSince = nil; awaySince = nil
             }
             pending = true
+            savePending()
             if pendingTimer == nil {
                 let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkPending() }
                 RunLoop.main.add(t, forMode: .common)
@@ -173,41 +174,150 @@ final class SpotifyQueue: ObservableObject {
     private func stopPending() {
         pending = false
         pendingTimer?.invalidate(); pendingTimer = nil
+        try? FileManager.default.removeItem(atPath: Self.pendingFile)
+    }
+
+    // MARK: held edits survive a restart (song names and Spotify links only, nothing secret)
+
+    private static let pendingFile = home + "/spotify-pending.json"
+
+    private func savePending() {
+        let list: [[String: Any]] = items.map { ["uri": $0.uri, "title": $0.title, "artist": $0.artist, "album": $0.album,
+                                                  "duration": $0.duration, "image": $0.image?.absoluteString ?? ""] }
+        let obj: [String: Any] = ["title": pendingTitle, "next": expectedNext ?? "", "items": list]
+        guard let d = try? JSONSerialization.data(withJSONObject: obj) else { return }
+        FileManager.default.createFile(atPath: Self.pendingFile, contents: d, attributes: [.posixPermissions: 0o600])
+    }
+
+    /// At launch: pick held edits back up if the song they were waiting for is still the one in Spotify.
+    func restorePending() {
+        guard let d = FileManager.default.contents(atPath: Self.pendingFile),
+              let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+              let title = o["title"] as? String, !title.isEmpty,
+              let list = o["items"] as? [[String: Any]] else {
+            try? FileManager.default.removeItem(atPath: Self.pendingFile); return
+        }
+        guard let s = DiscordPresence.shared.snapshot(), s.bundle == "com.spotify.client", s.title == title else {
+            try? FileManager.default.removeItem(atPath: Self.pendingFile); return   // the song moved on: too late
+        }
+        items = list.enumerated().compactMap { i, d in
+            guard let uri = d["uri"] as? String, Self.validURI(uri) else { return nil }
+            let img = (d["image"] as? String).flatMap { $0.hasPrefix("https://") ? URL(string: $0) : nil }
+            return Item(id: UUID(), uri: uri, title: d["title"] as? String ?? "?", artist: d["artist"] as? String ?? "",
+                        album: d["album"] as? String ?? "", duration: d["duration"] as? Double ?? 0, image: img, rawIndex: i)
+        }
+        loaded = true
+        pendingTitle = title
+        expectedNext = (o["next"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        lastRemaining = .infinity
+        pausedSince = nil; changedSince = nil; awaySince = nil
+        pending = true
+        let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkPending() }
+        RunLoop.main.add(t, forMode: .common)
+        pendingTimer = t
+        log("picked up held edits after a restart (waiting for \(title))")
+    }
+
+    // MARK: song timing when Now Playing doesn't report a length
+
+    private var appTiming: (duration: Double, position: Double, at: Date)?
+    private var appTimingAsked = Date.distantPast
+    /// Asks the Spotify app (already running: it's what's playing) for its song length and position.
+    private func askAppTiming() {
+        guard Date().timeIntervalSince(appTimingAsked) >= 2 else { return }
+        appTimingAsked = Date()
+        DispatchQueue.global(qos: .utility).async {
+            let p = Process(); let out = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            p.arguments = ["-e", "tell application \"Spotify\" to return ((duration of current track) / 1000 as text) & \",\" & (player position as text)"]
+            p.standardOutput = out; p.standardError = FileHandle.nullDevice
+            guard (try? p.run()) != nil else { return }
+            p.waitUntilExit()
+            let parts = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: " ")
+                .split(separator: " ").compactMap { Double($0) }
+            guard parts.count >= 2 else { return }
+            DispatchQueue.main.async { self.appTiming = (parts[0], parts[parts.count - 1], Date()) }
+        }
     }
 
     /// Sends the held edits when the song is about to end, when it changed anyway (skipped), or when paused.
+    private enum Trigger: String { case paused = "paused", changed = "song changed", ending = "song ending" }
+    private var confirming = false
+
     private func checkPending() {
-        guard pending, !busy else { return }
+        guard pending, !busy, !confirming else { return }
         let now = Date()
         guard now >= settleUntil else { return }
         guard let s = DiscordPresence.shared.snapshot(), s.bundle == "com.spotify.client" else {
             // the user moved to another player: the held edits no longer apply
             awaySince = awaySince ?? now
-            if now.timeIntervalSince(awaySince!) >= 5 { cancelPending() }
+            if now.timeIntervalSince(awaySince!) >= 5 { log("other player for 5 s: dropped"); cancelPending() }
             return
         }
         awaySince = nil
         if pendingTitle.isEmpty { pendingTitle = s.title; return }
         pausedSince = s.playing ? nil : (pausedSince ?? now)
         changedSince = s.title == pendingTitle ? nil : (changedSince ?? now)
-        if s.title == pendingTitle, s.duration > 0 { lastRemaining = s.duration - s.elapsed }
-        let start: Bool
-        if let p = pausedSince { guard now.timeIntervalSince(p) >= 2 else { return }; start = false }   // paused: apply silently
-        else if let c = changedSince {
-            guard now.timeIntervalSince(c) >= 0.4 else { return }
-            // the song ended, or the user pressed Next: Spotify moved on to its own next song. Anything else
-            // means they started other music, which the held edits must not take over.
-            guard s.title == expectedNext || lastRemaining <= 4 else {
-                NSLog("LyricsBar: other Spotify music started; dropping held queue edits")
-                pausedSince = nil; changedSince = nil
-                cancelPending()
-                return
+        // seconds left in the song; if Now Playing has no length, ask the Spotify app itself
+        var remaining: Double?
+        if s.duration > 0 { remaining = s.duration - s.elapsed }
+        else if s.title == pendingTitle {
+            askAppTiming()
+            if let t = appTiming, now.timeIntervalSince(t.at) < 5 {
+                remaining = t.duration - t.position - (s.playing ? now.timeIntervalSince(t.at) : 0)
             }
-            start = true
         }
-        else if s.duration > 0 && s.duration - s.elapsed <= 1.5 { start = true }
+        if s.title == pendingTitle, let r = remaining { lastRemaining = r }
+        let trigger: Trigger
+        if let p = pausedSince { guard now.timeIntervalSince(p) >= 2 else { return }; trigger = .paused }
+        else if let c = changedSince { guard now.timeIntervalSince(c) >= 0.4 else { return }; trigger = .changed }
+        else if let r = remaining, r <= 1.5 { trigger = .ending }
         else { return }
-        NSLog("LyricsBar: sending held Spotify edits (%@)", pausedSince != nil ? "paused" : changedSince != nil ? "song changed" : "song ending")
+        let seen = String(format: "now playing: %@ %@ %.1f/%.1f s", s.title, s.playing ? "playing" : "paused", s.elapsed, s.duration)
+        // Now Playing has fired false alarms mid-song: check with the Spotify app itself before acting
+        confirming = true
+        Self.appState { [weak self] app in
+            guard let self else { return }
+            self.confirming = false
+            guard self.pending, !self.busy else { return }
+            self.decide(trigger, app, snapshotTitle: s.title, seen: seen)
+        }
+    }
+
+    private func decide(_ trigger: Trigger, _ app: AppState?, snapshotTitle: String, seen: String) {
+        let appText = app.map { String(format: "app: %@ %@ %.1f/%.1f s", $0.name, $0.playing ? "playing" : "paused", $0.position, $0.duration) } ?? "app: unknown"
+        let falseAlarm = { (why: String) in
+            self.log("\(trigger.rawValue)? \(seen) | \(appText) → ignored (\(why))")
+            self.pausedSince = nil; self.changedSince = nil
+        }
+        var start = true
+        var title = snapshotTitle
+        switch trigger {
+        case .paused:
+            if let app, app.playing { return falseAlarm("still playing") }
+            start = false
+        case .changed, .ending:
+            if let app {
+                title = app.name
+                if app.name == pendingTitle {
+                    let left = app.duration - app.position
+                    guard left <= 2.5 else { return falseAlarm("same song, \(Int(left)) s left") }
+                    lastRemaining = left
+                }
+            }
+            if title != pendingTitle {
+                // the song ended, or the user pressed Next: Spotify moved on to its own next song. Anything else
+                // means they started other music, which the held edits must not take over.
+                guard title == expectedNext || lastRemaining <= 4 else {
+                    log("\(trigger.rawValue): \(seen) | \(appText) → other music started, dropped the held edits")
+                    pausedSince = nil; changedSince = nil
+                    cancelPending()
+                    return
+                }
+            }
+        }
+        log("\(trigger.rawValue): \(seen) | \(appText) → sending \(start ? "as the next songs" : "now (paused)")")
         pausedSince = nil; changedSince = nil
         stopPending()
         if start {
@@ -217,11 +327,47 @@ final class SpotifyQueue: ObservableObject {
                 self.settleUntil = Date().addingTimeInterval(2.5)
                 // the first song is playing now (unless the user already removed or moved it meanwhile)
                 if e == nil, let first, self.items.first?.id == first { self.items.removeFirst() }
-                if let e { NotificationCenter.default.post(name: .lyricsBarToast, object: e) }
+                if let e { self.log("send failed: \(e)"); NotificationCenter.default.post(name: .lyricsBarToast, object: e) }
             }
         } else {
             sendReplay(nil)
         }
+    }
+
+    struct AppState { let name: String; let playing: Bool; let duration: Double; let position: Double }
+
+    /// The Spotify app's own view (song, state, length, position). nil if it isn't running or didn't answer.
+    static func appState(_ done: @escaping (AppState?) -> Void) {
+        guard !NSRunningApplication.runningApplications(withBundleIdentifier: "com.spotify.client").isEmpty else { done(nil); return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let p = Process(); let out = Pipe()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            p.arguments = ["-e", """
+                tell application "Spotify" to return (name of current track) & tab & (player state as text) & tab & ((duration of current track) / 1000 as text) & tab & (player position as text)
+                """]
+            p.standardOutput = out; p.standardError = FileHandle.nullDevice
+            var r: AppState?
+            if (try? p.run()) != nil {
+                p.waitUntilExit()
+                let f = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    .trimmingCharacters(in: .newlines).components(separatedBy: "\t")
+                let num = { (s: String) in Double(s.replacingOccurrences(of: ",", with: ".")) }
+                if p.terminationStatus == 0, f.count == 4, let d = num(f[2]), let pos = num(f[3]) {
+                    r = AppState(name: f[0], playing: f[1] == "playing", duration: d, position: pos)
+                }
+            }
+            DispatchQueue.main.async { done(r) }
+        }
+    }
+
+    /// ~/.touchbar-lyrics/spotify-queue.log: what triggered held edits (song names only), kept short.
+    private func log(_ line: String) {
+        let path = home + "/spotify-queue.log"
+        let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        var lines = ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+        lines.append(df.string(from: Date()) + "  " + line)
+        let text = lines.suffix(200).joined(separator: "\n") + "\n"
+        FileManager.default.createFile(atPath: path, contents: Data(text.utf8), attributes: [.posixPermissions: 0o600])
     }
 
     private func sendReplay(_ done: ((String?) -> Void)?) {

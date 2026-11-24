@@ -30,7 +30,7 @@ cd lyricsbar
 
 `install.sh` does three things:
 
-- builds the app into `~/Applications/LyricsBar Stable.app` and creates a `~/Applications/LyricsBar.app` symlink to it
+- builds the app into `~/Applications/LyricsBar.app`
 - copies the helper scripts to `~/.touchbar-lyrics/`
 - installs two LaunchAgents: one for the app and one for the lyrics daemon (`lyricsd.py`). Both start at login and restart if they quit.
 
@@ -148,7 +148,7 @@ Album art is optional. Subsonic cover links contain your login and are never sen
 
 ## Stable and Beta
 
-`~/Applications/LyricsBar.app` is a symlink to either `LyricsBar Stable.app` or `LyricsBar Beta.app`, so you can try a build without losing a known-good one:
+You can keep a test build next to the normal one: `~/Applications/LyricsBar.app` is the stable version and `~/Applications/LyricsBar Beta.app` the beta. `~/.touchbar-lyrics/active.app` links to the one that runs:
 
 ```sh
 ./build.sh "$HOME/Applications/LyricsBar Beta.app"

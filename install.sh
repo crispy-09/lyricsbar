@@ -3,7 +3,8 @@
 # your settings, saved queue, lyrics cache and logins are kept (they live in ~/.touchbar-lyrics
 # and the Keychain, which this script never overwrites).
 #
-#  • app            → ~/Applications/LyricsBar Stable.app (+ ~/Applications/LyricsBar.app symlink)
+#  • app            → ~/Applications/LyricsBar.app (the Beta, if you build one, is LyricsBar Beta.app)
+#                     ~/.touchbar-lyrics/active.app links to the one that runs (switch.sh stable|beta)
 #  • helper scripts → ~/.touchbar-lyrics/ (lyricsd.py, library.py, switch.sh)
 #  • LaunchAgents   → ~/Library/LaunchAgents (start at login, restart if they quit)
 #
@@ -14,12 +15,19 @@ set -euo pipefail
 cd "${0:A:h}"
 DATA="$HOME/.touchbar-lyrics"
 APPS="$HOME/Applications"
-STABLE="$APPS/LyricsBar Stable.app"
+STABLE="$APPS/LyricsBar.app"
+OLDSTABLE="$APPS/LyricsBar Stable.app"          # where older versions installed it
+ACTIVE="$DATA/active.app"
 UID_=$(id -u)
 
 ver() { /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$1/Contents/Info.plist" 2>/dev/null || echo "?"; }
 OLD=""
-[[ -d "$STABLE" ]] && OLD=$(ver "$STABLE")
+if [[ -d "$OLDSTABLE" ]]; then OLD=$(ver "$OLDSTABLE"); elif [[ -d "$STABLE" ]]; then OLD=$(ver "$STABLE"); fi
+# older versions: ~/Applications/LyricsBar.app was a symlink to "LyricsBar Stable.app" or "LyricsBar Beta.app"
+WAS_BETA=""
+if [[ -L "$STABLE" ]]; then
+  [[ "$(readlink "$STABLE")" == *Beta* ]] && WAS_BETA=1
+fi
 
 mkdir -p "$DATA" "$APPS" "$HOME/Library/LaunchAgents"
 chmod 700 "$DATA"
@@ -37,8 +45,12 @@ elif [[ -s "$DATA/sign-id" ]]; then
 fi
 
 # 1. build first (if this fails, the running install is untouched)
-./build.sh "$STABLE"
-[[ -e "$APPS/LyricsBar.app" || -L "$APPS/LyricsBar.app" ]] || ln -s "LyricsBar Stable.app" "$APPS/LyricsBar.app"
+./build.sh "$STABLE"                              # replaces an old symlink at that path with the real app
+[[ -d "$OLDSTABLE" ]] && rm -rf "$OLDSTABLE"
+if [[ ! -L "$ACTIVE" ]] || [[ ! -d "$ACTIVE/" ]]; then
+  if [[ -n "$WAS_BETA" && -d "$APPS/LyricsBar Beta.app" ]]; then ln -sfn "$APPS/LyricsBar Beta.app" "$ACTIVE"
+  else ln -sfn "$STABLE" "$ACTIVE"; fi
+fi
 
 # 2. helper scripts (only code is replaced; config.json, queue.json, cache/ etc. are left alone)
 install -m 755 scripts/lyricsd.py scripts/library.py scripts/switch.sh "$DATA/"
@@ -59,7 +71,7 @@ done
 NEWV=$(ver "$STABLE")
 if [[ -n "$OLD" ]]; then echo "LyricsBar updated ($OLD → $NEWV). Your settings, queue and logins were kept."
 else echo "LyricsBar $NEWV installed. Hold the album art on the Touch Bar to open Settings."; fi
-if [[ "$(readlink "$APPS/LyricsBar.app")" == *Beta* ]]; then
+if [[ "$(readlink "$ACTIVE")" == *Beta* ]]; then
   echo "note: you're running the Beta build; switch with: ~/.touchbar-lyrics/switch.sh stable"
 fi
 echo "If macOS asks for your Keychain password, choose \"Always Allow\" (LyricsBar waits for that before loading your logins)."

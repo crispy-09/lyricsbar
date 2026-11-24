@@ -209,7 +209,8 @@ def spotify_jump(uri, hint):
 
 def spotify_queue_playlist(pid):
     """Add a playlist's songs (or Liked Songs) to the end of the queue. Capped at 100: one request per song."""
-    if not re.match(r"^spotify:(playlist:[A-Za-z0-9]{1,64}|user:[A-Za-z0-9._-]{1,64}:collection)$", pid):
+    # Liked Songs comes as "spotify:collection" (the user id isn't needed, and may hold characters we strip)
+    if not re.match(r"^spotify:(playlist:[A-Za-z0-9]{1,64}|collection|user:[A-Za-z0-9._-]{1,64}:collection)$", pid):
         raise RuntimeError("invalid playlist")
     st = spotify_api("GET", "/me/player")
     if not st or not st.get("device"):
@@ -235,10 +236,17 @@ def spotify_queue_playlist(pid):
         nxt = r.get("next") or ""
         url = nxt[len("https://api.spotify.com/v1"):] if nxt.startswith("https://api.spotify.com/v1/") else None
     uris = uris[:100]
+    done = 0
     for u in uris:
-        spotify_api("POST", f"/me/player/queue?uri={urllib.parse.quote(u, safe='')}&device_id={dev}")
+        try:
+            spotify_api("POST", f"/me/player/queue?uri={urllib.parse.quote(u, safe='')}&device_id={dev}")
+        except RuntimeError as e:
+            if done == 0:
+                raise
+            return {"queued": done, "total": len(uris), "error": str(e)}   # say how far it got
+        done += 1
         time.sleep(0.05)
-    return {"queued": len(uris)}
+    return {"queued": done, "total": len(uris)}
 
 
 def _spotify_local(st):

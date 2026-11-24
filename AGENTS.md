@@ -28,6 +28,7 @@ Notes for coding agents (and humans) working on LyricsBar.
   - IDs stay stable across refreshes, keyed by uri plus occurrence.
   - Edits run one at a time; later edits are merged into the next replay.
   - While Spotify plays, edits only change `items` and set `pending`; a 0.25 s timer sends them (`spotify-replace --start`, which plays the list instead of replaying the current song) when ≤ 1.5 s remain, when the song changes, or at once (keep-current mode) when paused. Refreshes don't overwrite `items` while pending. Play Now while pending starts the shown list from that song. A song change only applies held edits if the new song is Spotify's own next (`expectedNext`) or the old song was within 4 s of its end; anything else (other music, another player for 5 s, picking a playlist) cancels them (`cancelPending`).
+  - Before acting on a trigger, `checkPending` confirms it with the Spotify app (`appState`, AppleScript): Now Playing has fired false "song ending/changed" alarms mid-song. Decisions go to `~/.touchbar-lyrics/spotify-queue.log` (song names only, last 200 lines). Held edits are saved to `spotify-pending.json` and restored at launch if the same song is still playing.
   - `library.py` uses AppleScript (volume, `next track`) only when the active device is this Mac's Spotify app (`_spotify_local`), never launching it; otherwise the Web API. `spotify_replace` re-pauses a paused song in `finally`, and never mutes without a known volume to restore.
   - A replay alone doesn't work: songs added with "Add to queue" live in a separate queue that survives `PUT /me/player/play`. So `spotify_replace` mutes Spotify, skips (AppleScript `next track`) through everything queued, plays the current song + the new list, pauses again if it was paused, seeks back, then unmutes. It checks the result and drains again (up to 3 rounds), since the queue listing shows only ~20 songs.
   - While the bar's Up Next shows Spotify, `followSpotifyQueue()` reloads it on song change and every 6 s.
@@ -50,7 +51,7 @@ Notes for coding agents (and humans) working on LyricsBar.
 
 ```sh
 ./build.sh "$HOME/Applications/LyricsBar Beta.app"   # build into the Beta slot
-~/.touchbar-lyrics/switch.sh beta                     # run it (the LaunchAgent follows the symlink)
+~/.touchbar-lyrics/switch.sh beta                     # run it (the LaunchAgent runs ~/.touchbar-lyrics/active.app, a link)
 launchctl kickstart -k gui/$(id -u)/com.crispy.lyricsbar   # restart
 ```
 
