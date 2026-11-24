@@ -31,7 +31,6 @@ Notes for coding agents (and humans) working on LyricsBar.
   - A replay alone doesn't work: songs added with "Add to queue" live in a separate queue that survives `PUT /me/player/play`. So `spotify_replace` mutes Spotify, skips (AppleScript `next track`) through everything queued, plays the current song + the new list, pauses again if it was paused, seeks back, then unmutes. It checks the result and drains again (up to 3 rounds), since the queue listing shows only ~20 songs.
   - While the bar's Up Next shows Spotify, `followSpotifyQueue()` reloads it on song change and every 6 s.
   - `QueueStrip.onClear`: swiping right at the start of the list reveals a red Clear pill.
-- `BarAwake` (bottom of `main.swift`) keeps the Touch Bar lit with `IOPMAssertionDeclareUserActivity`. It tells real input apart by `HIDIdleTime` dropping below the time since its own declaration.
 - `Sources/Visualizer.swift`: `AudioTap` (FFT into band levels) and `VisualizerView`. The audio source is:
   - LyricsBar's own player: `MTAudioProcessingTap` on each `AVPlayerItem`
   - other apps: a Core Audio process tap on that app's processes
@@ -91,6 +90,7 @@ Screenshots:
 - **Don't drive playback through `transport()` in tests.** It controls whichever app is Now Playing, which could be the user's Spotify or Music. Call `StreamPlayer` directly with `testMuted = true` (as `mutedtest` does).
 - **Don't start audible playback** or send real scrobbles without asking the user.
 - **Don't test Spotify queue edits (`spotify-jump` / `spotify-replace`) on the user's account.** They change real playback.
+- **Apps can't keep the Touch Bar awake.** TouchBarServer (root) turns it off ~75 s after the last *hardware* input. Tried and failed: `IOPMAssertionDeclareUserActivity` (keeps the screen on only), `DFRSetStatus(1)` (ignored), synthetic `CGEvent`s (reset `HIDIdleTime` but not the bar's timer), and CoreBrightness `suspendIdleDimming` (keyboard backlight only). The old "Touch Bar sleep" setting was removed for this reason.
 - **No top-level `let`/`var` after the run loop starts in `main.swift`.** Code below `app.run()` never runs, so such a global stays uninitialised and crashes when read. Put constants in a type's `static let`.
 
 ## Touch Bar quirks

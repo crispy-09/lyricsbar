@@ -63,9 +63,6 @@ struct Config: Codable, Equatable {
     var pausedBuiltinQuotes = true
     var pausedQuoteSeconds = 60.0     // whole minutes, at least 1
     var artLinger = 10.0              // the cover (button + album background) stays this long after pausing (-1 = keep it)
-    var barSleepMinutes = 0.0         // Touch Bar sleep while music plays: 0 = like macOS (~1 min), -1 = never, else minutes after last use
-    var barSleepIdleMinutes = 0.0     // the same, when nothing is playing
-    var barAwakeOnlyWhilePlaying = true   // old setting; only read to migrate into barSleepIdleMinutes
     // Discord Rich Presence (Settings → Discord)
     var discordEnabled = false
     var discordAppId = ""             // your Discord application's ID (public, not a secret)
@@ -120,10 +117,6 @@ final class ConfigStore: ObservableObject {
             if file["lyricHoldAction"] == nil, (file["lyricTapAction"] as? String) == "controls" { merged["lyricHoldAction"] = "pause" }
             // 2 s was the old default, never a choice: move it to the new 10 s default
             if (file["artLinger"] as? Double) == 2 { merged["artLinger"] = 10.0 }
-            // "only keep it awake while music plays" became its own timer for when nothing plays
-            if file["barSleepIdleMinutes"] == nil, (file["barAwakeOnlyWhilePlaying"] as? Bool) == false {
-                merged["barSleepIdleMinutes"] = file["barSleepMinutes"] as? Double ?? 0
-            }
             // quote rotation is now whole minutes, at least one
             if let q = file["pausedQuoteSeconds"] as? Double { merged["pausedQuoteSeconds"] = max(60, (q / 60).rounded() * 60) }
         }

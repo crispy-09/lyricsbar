@@ -2405,7 +2405,6 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         updateBackgroundMode()
         updatePausedScreen()
         followSpotifyQueue()
-        BarAwake.shared.tick(playing: view.isPlaying)
         view.updateProgress()
         driveVisualizer()
         checkOutro()
@@ -2587,63 +2586,4 @@ enum BuiltinQuotes {   // a type, not a top-level let: main.swift globals after 
     ("Music can change the world because it can change people.", "Bono"),
     ("I think music in itself is healing.", "Billy Joel"),
     ]
-}
-
-// MARK: - Keeping the Touch Bar awake
-
-/// macOS dims the Touch Bar after about a minute without keyboard/trackpad input. To keep it lit we declare
-/// user activity (like `caffeinate -u`), which also keeps the screen on. Our own declarations reset the idle
-/// counter too, so real activity is told apart by the counter dropping below the time since our last one.
-final class BarAwake {
-    static let shared = BarAwake()
-    private var assertion: IOPMAssertionID = 0
-    private var lastDeclare: Date?
-    private var lastReal = Date()
-    private var lastCheck = Date.distantPast
-
-    private func hidIdle() -> Double? {
-        let s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOHIDSystem"))
-        guard s != 0 else { return nil }
-        defer { IOObjectRelease(s) }
-        guard let v = IORegistryEntryCreateCFProperty(s, "HIDIdleTime" as CFString, kCFAllocatorDefault, 0)?
-            .takeRetainedValue() as? NSNumber else { return nil }
-        return v.doubleValue / 1e9
-    }
-
-    private var screensAsleep = false
-    private var observing = false
-    private func observeScreens() {
-        guard !observing else { return }
-        observing = true
-        let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.screensAsleep = true }
-        nc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.screensAsleep = false }
-    }
-    private func screenLocked() -> Bool {
-        guard let d = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
-        return (d["CGSSessionScreenIsLocked"] as? Bool) ?? false
-    }
-
-    func tick(playing: Bool) {
-        observeScreens()
-        let now = Date()
-        guard now.timeIntervalSince(lastCheck) >= 5 else { return }
-        lastCheck = now
-        if let idle = hidIdle() {
-            let sinceOurs = lastDeclare.map { now.timeIntervalSince($0) } ?? .infinity
-            if idle < sinceOurs - 1.5 { lastReal = now.addingTimeInterval(-idle) }   // a real key/trackpad event
-        }
-        let mins = playing ? cfg.barSleepMinutes : cfg.barSleepIdleMinutes   // 0 = like macOS, -1 = never, else minutes after last use
-        // declaring activity turns the display on, so never while it's asleep or locked
-        let want = mins != 0 && !screensAsleep && !screenLocked()
-            && (mins < 0 || now.timeIntervalSince(lastReal) < mins * 60)
-        if want {
-            if lastDeclare == nil || now.timeIntervalSince(lastDeclare!) >= 20 {
-                IOPMAssertionDeclareUserActivity("LyricsBar keeps the Touch Bar awake" as CFString, kIOPMUserActiveLocal, &assertion)
-                lastDeclare = now
-            }
-        } else if assertion != 0 {
-            IOPMAssertionRelease(assertion); assertion = 0
-        }
-    }
 }
