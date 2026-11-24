@@ -8,6 +8,8 @@ import AudioToolbox
 import AVFoundation
 import MediaPlayer
 import Combine
+import IOKit
+import IOKit.pwr_mgt
 
 let home = (NSHomeDirectory() as NSString).appendingPathComponent(".touchbar-lyrics")
 let mediaControl = "/opt/homebrew/bin/media-control"
@@ -104,6 +106,14 @@ func currentWallpaperURL() -> URL? {
         if FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir), !isDir.boolValue { return u }
     }
     return nil
+}
+
+/// A rotating wallpaper (a folder of pictures): macOS reports the folder, not the picture on screen.
+func wallpaperIsRotating() -> Bool {
+    let screen = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.main
+    guard let s = screen, let u = NSWorkspace.shared.desktopImageURL(for: s) else { return false }
+    var isDir: ObjCBool = false
+    return FileManager.default.fileExists(atPath: u.path, isDirectory: &isDir) && isDir.boolValue
 }
 
 // MARK: - System controls (no permissions needed)
@@ -1060,6 +1070,7 @@ final class BarView: NSView {
     var lyricLimits: [NSLayoutConstraint] = []
     var lyricPinArt: NSLayoutConstraint!, lyricPinViz: NSLayoutConstraint!, lyricCenter: NSLayoutConstraint!
     var mediaTimer: Timer?, panelTimer: Timer?, seekTimer: Timer?
+    var keepControlsWhilePaused = false
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -1150,14 +1161,23 @@ final class BarView: NSView {
             self?.backBtn.image = over ? coloredSymbol("trash.fill", 14, .systemRed) : symbol("trash", 14)
         }
         queueStrip.onTap = { [weak self] e in
-            if let u = e.uid { StreamPlayer.shared.jump(uid: u) }
-            self?.closePicker()
+            guard let self else { return }
+            if self.stripIsSpotify {
+                if let u = e.uid { SpotifyQueue.shared.jump(id: u) { err in if let err { self.toast(err, seconds: 3) } } }
+            } else if let u = e.uid { StreamPlayer.shared.jump(uid: u) }
+            self.closePicker()
         }
         queueStrip.onMove = { [weak self] in
             guard let self else { return }
-            StreamPlayer.shared.reorderUpcoming(self.queueStrip.entries.compactMap(\.uid))
+            let ids = self.queueStrip.entries.compactMap(\.uid)
+            if self.stripIsSpotify { SpotifyQueue.shared.reorder(ids) { err in if let err { self.toast(err, seconds: 3) } } }
+            else { StreamPlayer.shared.reorderUpcoming(ids) }
         }
-        queueStrip.onRemove = { e in if let u = e.uid { StreamPlayer.shared.remove(uid: u) } }
+        queueStrip.onRemove = { [weak self] e in
+            guard let self, let u = e.uid else { return }
+            if self.stripIsSpotify { SpotifyQueue.shared.remove(id: u) { err in if let err { self.toast(err, seconds: 3) } } }
+            else { StreamPlayer.shared.remove(uid: u) }
+        }
         // keep the strip in sync with the player (song changes, Library edits); never mid-drag
         queueSync = StreamPlayer.shared.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.syncQueueStrip(); self?.updateExtras() }
@@ -1398,11 +1418,27 @@ final class BarView: NSView {
     // MARK: state updates
 
     func setLyric(_ s: String) {
-        if Date() < titleCardUntil { return }
+        if Date() < titleCardUntil || pausedActive { return }
         guard s != lyricKey else { return }
         lyricKey = s
         animateLyric()
         lyric.attributedStringValue = NSAttributedString(string: s, attributes: lyricAttrs(.white))
+    }
+
+    /// What the lyric line shows while paused (Settings → General → While paused).
+    var pausedActive = false
+    func showPaused(_ a: NSAttributedString, key: String) {
+        guard Date() >= titleCardUntil, !outroActive else { return }
+        pausedActive = true
+        guard lyricKey != key else { return }
+        lyricKey = key
+        animateLyric()
+        lyric.attributedStringValue = a
+    }
+    func clearPaused() {
+        guard pausedActive else { return }
+        pausedActive = false
+        lyricKey = "\u{1}"                     // the next lyric line re-renders
     }
 
     func setPlaying(_ playing: Bool) {
@@ -1529,7 +1565,9 @@ final class BarView: NSView {
         lyric.attributedStringValue = NSAttributedString(string: text, attributes: lyricAttrs(.white))
     }
 
+    var stripIsSpotify = false
     func syncQueueStrip() {
+        guard !stripIsSpotify else { return }
         guard pickerMode, showingUpNext, bundleId == Bundle.main.bundleIdentifier, StreamPlayer.shared.active else { return }
         if queueStrip.isHolding { queueDirty = true; return }
         queueDirty = false
@@ -1619,6 +1657,7 @@ final class BarView: NSView {
             if self.upNextReturnsToMedia { self.closePicker(); self.setMediaMode(true) } else { self.showProviders() }
         }
         let sp = StreamPlayer.shared
+        stripIsSpotify = false
         if bundleId == Bundle.main.bundleIdentifier, sp.active {
             // our own queue: editable (hold + drag to reorder, drop on 🗑 to remove)
             if sp.upcoming.isEmpty {
@@ -1639,10 +1678,17 @@ final class BarView: NSView {
                 list.prefix(40).map { .init(title: "\($0.0) — \($0.1)", action: nil) })
         }
         if bundleId == "com.spotify.client" {
-            libraryJSON(["queue", "spotify"]) { obj, err in
-                let list = (obj as? [[String: Any]])?.map { ($0["title"] as? String ?? "?", $0["artist"] as? String ?? "") }
-                fill(list, (err ?? "").contains("scope") || (err ?? "").contains("401") || (err ?? "").contains("403")
-                     ? "Reconnect Spotify in Settings → Providers to see Up Next" : (err ?? "Couldn't load the queue"))
+            // same strip as our own queue: tap to play, hold + drag to reorder, drop on 🗑 to remove
+            let q = SpotifyQueue.shared
+            q.refresh { [weak self] in
+                guard let self, self.pickerMode, self.showingUpNext, !self.queueStrip.isHolding else { return }
+                if let e = q.error { fill(nil, e) }
+                else if q.items.isEmpty { fill([], "") }
+                else {
+                    self.stripIsSpotify = true
+                    self.useQueueStrip(true)
+                    self.queueStrip.entries = q.items.map { .init(title: $0.title, sub: $0.artist, uid: $0.id) }
+                }
             }
         } else {
             fill(nil, "Up Next isn't available for this player")
@@ -1726,7 +1772,9 @@ final class BarView: NSView {
         mediaTimer?.invalidate()
         guard mediaMode else { return }
         mediaTimer = Timer.scheduledTimer(withTimeInterval: cfg.mediaAutoHide, repeats: false) { [weak self] _ in
-            self?.setMediaMode(false)
+            guard let self else { return }
+            if self.keepControlsWhilePaused && !self.isPlaying { self.bumpMediaTimer(); return }   // stay up while paused
+            self.setMediaMode(false)
         }
     }
 
@@ -2135,6 +2183,15 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         let artURL = URL(fileURLWithPath: home + "/artwork.jpg")
         let useArt = cfg.backgroundStyle == "album" && artBG
         if useArt && !FileManager.default.fileExists(atPath: artURL.path) { return }   // next cover not ready: keep current
+        if !useArt && wallpaperIsRotating() {
+            // macOS doesn't say which picture a rotating folder is showing: plain black instead of a stale one
+            guard wallpaperKey != "rotating" else { return }
+            wallpaperKey = "rotating"
+            let t = CATransition(); t.type = .fade; t.duration = 0.6
+            view.bg.layer?.add(t, forKey: "bg")
+            view.bg.image = NSImage(size: barSize, flipped: false) { r in NSColor.black.setFill(); r.fill(); return true }
+            return
+        }
         guard let url = useArt ? artURL : currentWallpaperURL() else { return }
         let mtime = (try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date)?
             .timeIntervalSince1970 ?? 0
@@ -2202,9 +2259,72 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             if artBG { artBG = false; refreshWallpaperNow() }
         }
         updateBackgroundMode()
+        updatePausedScreen()
+        BarAwake.shared.tick(playing: view.isPlaying)
         view.updateProgress()
         driveVisualizer()
         checkOutro()
+    }
+
+    // MARK: while paused
+
+    var pausedSince: Date?
+    var controlsOpenedForPause = false
+    func updatePausedScreen() {
+        let mode = cfg.pausedShows
+        let paused = !view.isPlaying && !lastTitle.isEmpty
+        if !paused { pausedSince = nil } else if pausedSince == nil { pausedSince = Date() }
+        let since = pausedSince.map { Date().timeIntervalSince($0) } ?? 0
+        let active = paused && mode != "lyrics" && since >= cfg.pausedDelay
+        view.keepControlsWhilePaused = active && mode == "controls"
+        guard active else {
+            view.clearPaused()
+            if controlsOpenedForPause { controlsOpenedForPause = false; if view.mediaMode { view.setMediaMode(false) } }
+            return
+        }
+        if mode == "controls" {
+            view.clearPaused()
+            if !view.mediaMode && !view.pickerMode && !controlsOpenedForPause { controlsOpenedForPause = true; view.setMediaMode(true) }
+            return
+        }
+        let dim = NSColor.white.withAlphaComponent(0.6)
+        let a = NSMutableAttributedString()
+        var key = "\u{1}paused:" + mode
+        switch mode {
+        case "title":
+            a.append(NSAttributedString(string: lastTitle, attributes: view.lyricAttrs(.white)))
+            if !lastArtist.isEmpty { a.append(NSAttributedString(string: "   " + lastArtist, attributes: view.lyricAttrs(dim, .regular))) }
+            key += lastTitle + lastArtist
+        case "phrase":
+            let t = cfg.pausedPhrase.replacingOccurrences(of: "{title}", with: lastTitle)
+                .replacingOccurrences(of: "{artist}", with: lastArtist)
+            a.append(NSAttributedString(string: t, attributes: view.lyricAttrs(.white)))
+            key += t
+        default:   // quotes
+            let qs = pausedQuotes()
+            guard !qs.isEmpty else { view.clearPaused(); return }
+            let i = Int((since - cfg.pausedDelay) / max(3, cfg.pausedQuoteSeconds)) % qs.count
+            let (text, by) = qs[(i + quoteOffset) % qs.count]
+            a.append(NSAttributedString(string: text, attributes: view.lyricAttrs(.white, .regular)))
+            if !by.isEmpty { a.append(NSAttributedString(string: "   — " + by, attributes: view.lyricAttrs(dim, .regular))) }
+            key += "\(i)"
+        }
+        view.showPaused(a, key: key)
+    }
+
+    lazy var quoteOffset = Int.random(in: 0..<1000)   // start somewhere different each launch
+    func pausedQuotes() -> [(String, String)] {
+        var out: [(String, String)] = []
+        for line in cfg.pausedQuotes.split(whereSeparator: \.isNewline) {
+            let s = line.trimmingCharacters(in: .whitespaces)
+            guard !s.isEmpty else { continue }
+            // "text — author" (or " - author") splits the author off
+            if let r = s.range(of: " — ", options: .backwards) ?? s.range(of: " - ", options: .backwards) {
+                out.append((String(s[..<r.lowerBound]), String(s[r.upperBound...])))
+            } else { out.append((s, "")) }
+        }
+        if cfg.pausedBuiltinQuotes || out.isEmpty { out += BuiltinQuotes.all }
+        return out
     }
 
     func checkOutro() {
@@ -2237,7 +2357,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         } else { done(nil) }
     }
 
-    /// Album-art background while playing; wallpaper again ~2s after playback stops.
+    /// Album-art background while playing; wallpaper again `artLinger` seconds after playback stops (-1 = keep it).
     func updateBackgroundMode() {
         guard cfg.backgroundStyle == "album" else { if artBG { artBG = false }; return }
         if view.isPlaying {
@@ -2245,7 +2365,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             if !artBG && FileManager.default.fileExists(atPath: home + "/artwork.jpg") { artBG = true; refreshWallpaperNow() }
         } else {
             if stoppedSince == nil { stoppedSince = Date() }
-            if artBG && Date().timeIntervalSince(stoppedSince!) > 2 { artBG = false; refreshWallpaperNow() }
+            if artBG && cfg.artLinger >= 0 && Date().timeIntervalSince(stoppedSince!) > cfg.artLinger { artBG = false; refreshWallpaperNow() }
         }
     }
 
@@ -2291,3 +2411,65 @@ let delegate = App()
 app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()
+
+
+// MARK: - Quotes for the paused screen
+
+enum BuiltinQuotes {   // a type, not a top-level let: main.swift globals after the run loop never initialise
+    static let all: [(String, String)] = [
+    ("Where words fail, music speaks.", "Hans Christian Andersen"),
+    ("Without music, life would be a mistake.", "Friedrich Nietzsche"),
+    ("Music expresses that which cannot be said and on which it is impossible to be silent.", "Victor Hugo"),
+    ("If music be the food of love, play on.", "Shakespeare"),
+    ("After silence, that which comes nearest to expressing the inexpressible is music.", "Aldous Huxley"),
+    ("Music is the universal language of mankind.", "Henry Wadsworth Longfellow"),
+    ("One good thing about music, when it hits you, you feel no pain.", "Bob Marley"),
+    ("Music can change the world because it can change people.", "Bono"),
+    ("I think music in itself is healing.", "Billy Joel"),
+    ("Take a breath. The song will wait.", ""),
+    ("Paused, not stopped.", ""),
+    ]
+}
+
+// MARK: - Keeping the Touch Bar awake
+
+/// macOS dims the Touch Bar after about a minute without keyboard/trackpad input. To keep it lit we declare
+/// user activity (like `caffeinate -u`), which also keeps the screen on. Our own declarations reset the idle
+/// counter too, so real activity is told apart by the counter dropping below the time since our last one.
+final class BarAwake {
+    static let shared = BarAwake()
+    private var assertion: IOPMAssertionID = 0
+    private var lastDeclare: Date?
+    private var lastReal = Date()
+    private var lastCheck = Date.distantPast
+
+    private func hidIdle() -> Double? {
+        let s = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOHIDSystem"))
+        guard s != 0 else { return nil }
+        defer { IOObjectRelease(s) }
+        guard let v = IORegistryEntryCreateCFProperty(s, "HIDIdleTime" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? NSNumber else { return nil }
+        return v.doubleValue / 1e9
+    }
+
+    func tick(playing: Bool) {
+        let now = Date()
+        guard now.timeIntervalSince(lastCheck) >= 5 else { return }
+        lastCheck = now
+        if let idle = hidIdle() {
+            let sinceOurs = lastDeclare.map { now.timeIntervalSince($0) } ?? .infinity
+            if idle < sinceOurs - 1.5 { lastReal = now.addingTimeInterval(-idle) }   // a real key/trackpad event
+        }
+        let mins = cfg.barSleepMinutes                 // 0 = like macOS, -1 = never, else minutes after last use
+        let want = mins != 0 && (playing || !cfg.barAwakeOnlyWhilePlaying)
+            && (mins < 0 || now.timeIntervalSince(lastReal) < mins * 60)
+        if want {
+            if lastDeclare == nil || now.timeIntervalSince(lastDeclare!) >= 20 {
+                IOPMAssertionDeclareUserActivity("LyricsBar keeps the Touch Bar awake" as CFString, kIOPMUserActiveLocal, &assertion)
+                lastDeclare = now
+            }
+        } else if assertion != 0 {
+            IOPMAssertionRelease(assertion); assertion = 0
+        }
+    }
+}

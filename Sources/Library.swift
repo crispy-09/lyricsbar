@@ -702,7 +702,10 @@ struct QueueView: View {
     @State private var external: [(String, String)] = []
     var body: some View {
         Group {
-            if sp.active {
+            // Spotify is the current player (and ours isn't playing): show Spotify's queue, not our paused one
+            if np.bundle == "com.spotify.client" && !np.title.isEmpty && !sp.isPlaying {
+                SpotifyQueueList(np: np)
+            } else if sp.active {
                 List {
                     Section("Now Playing") {
                         if sp.tracks.indices.contains(sp.index) { trackRow(sp.tracks[sp.index], playing: true) }
@@ -737,6 +740,8 @@ struct QueueView: View {
                         Text("Drag to reorder · right-click to remove · double-click to play").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+            } else if np.bundle == "com.spotify.client" && !np.title.isEmpty {
+                SpotifyQueueList(np: np)
             } else if !np.title.isEmpty {
                 List {
                     Section("Now Playing") { Text("\(np.title) — \(np.artist)") }
@@ -779,18 +784,91 @@ struct QueueView: View {
     }
 }
 
+/// Spotify's Up Next, laid out like our own queue: drag to reorder, right-click to remove, double-click to play.
+struct SpotifyQueueList: View {
+    @ObservedObject var np: NowPlayingModel
+    @ObservedObject var q = SpotifyQueue.shared
+    @State private var note: String?
+    var body: some View {
+        List {
+            Section("Now Playing") {
+                HStack(spacing: 12) {
+                    TrackCover(url: nil, image: np.art)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(np.title).fontWeight(.semibold).lineLimit(1)
+                        Text(np.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                    Image(systemName: np.playing ? "speaker.wave.2.fill" : "pause.fill").foregroundStyle(.secondary)
+                }
+            }
+            Section {
+                if let e = q.error {
+                    Label(e, systemImage: "exclamationmark.triangle").foregroundStyle(.secondary)
+                } else if q.loaded && q.items.isEmpty {
+                    Text("Nothing queued after this song").foregroundStyle(.secondary)
+                }
+                ForEach(q.items) { t in
+                    HStack(spacing: 12) {
+                        TrackCover(url: t.image, plain: true)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(t.title).lineLimit(1)
+                            Text(t.album.isEmpty ? t.artist : "\(t.artist) — \(t.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer()
+                        Text(mmss(Int(t.duration))).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { q.jump(id: t.id, report) }
+                    .contextMenu {
+                        Button("Play Now") { q.jump(id: t.id, report) }
+                        Button("Remove from Queue", role: .destructive) { q.remove(id: t.id, report) }
+                    }
+                }
+                .onMove { from, to in
+                    var ids = q.items.map(\.id)
+                    ids.move(fromOffsets: from, toOffset: to)
+                    q.reorder(ids, report)
+                }
+                .onDelete { offs in
+                    if let i = offs.first, q.items.indices.contains(i) { q.remove(id: q.items[i].id, report) }
+                }
+            } header: {
+                HStack {
+                    Text("Up Next · Spotify · \(q.items.count) songs")
+                    Spacer()
+                    if q.busy { ProgressView().controlSize(.small) }
+                    Button { q.refresh() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless)
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Drag to reorder · right-click to remove · double-click to play").font(.caption).foregroundStyle(.secondary)
+                    Text("Spotify can't edit its queue directly, so a reorder or removal replays these songs as a new list from where you are now (needs Premium).")
+                        .font(.caption).foregroundStyle(.tertiary)
+                    if let note { Text(note).font(.caption).foregroundStyle(.orange) }
+                }
+            }
+        }
+        .task(id: np.title) { q.refresh() }
+    }
+    func report(_ err: String?) { note = err }
+}
+
 struct TrackCover: View {
     let url: URL?
+    var image: NSImage? = nil              // already loaded (Now Playing)
+    var plain = false                      // not a Subsonic URL: no Subsonic user agent
     @State private var img: NSImage?
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 4).fill(.quaternary)
-            if let img { Image(nsImage: img).resizable().aspectRatio(contentMode: .fill) }
+            if let i = image ?? img { Image(nsImage: i).resizable().aspectRatio(contentMode: .fill) }
         }
         .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 4))
         .task(id: url) {
             guard let url else { return }
-            var req = URLRequest(url: url); req.setValue(Subsonic.userAgent, forHTTPHeaderField: "User-Agent")
+            var req = URLRequest(url: url)
+            if !plain { req.setValue(Subsonic.userAgent, forHTTPHeaderField: "User-Agent") }
             if let (d, _) = try? await URLSession.shared.data(for: req) { img = NSImage(data: d) }
         }
     }

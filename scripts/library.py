@@ -4,9 +4,12 @@
   library.py providers                  -> [{"id","name","ready"}]
   library.py playlists <provider>       -> [{"id","name","count"}]   (subsonic | spotify | applemusic)
   library.py tracks subsonic <id>       -> [{"id","title","artist","album","duration","stream","cover"}]
+  library.py queue spotify              -> [{"title","artist","album","uri","duration","image"}]
+  library.py spotify-skip <n>           -> skip forward n songs
+  library.py spotify-replace <uri>...   -> replay current song + this list (remove / reorder)
   library.py spotify-login <client_id>  -> one-time Spotify sign-in (opens the browser)
 """
-import base64, hashlib, http.server, json, os, secrets, subprocess, sys, time
+import base64, hashlib, http.server, json, os, re, secrets, subprocess, sys, time
 import urllib.error, urllib.parse, urllib.request
 
 HOME = os.path.expanduser("~/.touchbar-lyrics")
@@ -112,18 +115,73 @@ def spotify_playlists():
     return out
 
 
-def spotify_queue():
+SPOTIFY_URI = re.compile(r"^spotify:(track|episode):[A-Za-z0-9]{22}$")
+
+
+def spotify_api(method, path, body=None):
+    """Call the Spotify Web API; returns parsed JSON or None (204). Raises RuntimeError with a readable reason."""
     tok = spotify_token()
+    data = json.dumps(body).encode() if body is not None else (b"" if method in ("POST", "PUT") else None)
+    req = urllib.request.Request("https://api.spotify.com/v1" + path, data=data, method=method, headers={
+        "User-Agent": UA, "Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
     try:
-        r = http_json("https://api.spotify.com/v1/me/player/queue", headers={"Authorization": f"Bearer {tok}"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else None
     except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Spotify answered {e.code} (missing scope? reconnect)")
-    out = []
-    for t in r.get("queue", []):
-        people = t.get("artists") or ([t["show"]] if t.get("show") else [])   # songs have artists, podcasts a show
-        artists = ", ".join(a.get("name", "") for a in people)
-        out.append({"title": t.get("name", "?"), "artist": artists})
-    return out
+        try:
+            msg = json.loads(e.read()).get("error", {}).get("message", "")
+        except Exception:
+            msg = ""
+        if e.code in (401, 403) and "scope" in msg.lower():
+            raise RuntimeError("Spotify needs new permissions: reconnect it in Settings → Providers (scope)")
+        if e.code == 403:
+            raise RuntimeError("Spotify only allows queue changes with Premium" + (f" ({msg})" if msg else ""))
+        if e.code == 404:
+            raise RuntimeError("Spotify isn't playing on any device right now")
+        raise RuntimeError(f"Spotify answered {e.code}" + (f": {msg}" if msg else ""))
+
+
+def _track(t):
+    people = t.get("artists") or ([t["show"]] if t.get("show") else [])   # songs have artists, podcasts a show
+    album = t.get("album") or t.get("show") or {}
+    imgs = album.get("images") or t.get("images") or []
+    img = min(imgs, key=lambda i: i.get("width") or 9999).get("url", "") if imgs else ""
+    return {"title": t.get("name", "?"), "artist": ", ".join(a.get("name", "") for a in people),
+            "album": album.get("name", ""), "uri": t.get("uri", ""), "duration": (t.get("duration_ms") or 0) / 1000,
+            "image": img if img.startswith("https://") else ""}
+
+
+def spotify_queue():
+    r = spotify_api("GET", "/me/player/queue") or {}
+    return [_track(t) for t in r.get("queue", []) if t]
+
+
+def spotify_skip(n):
+    """Jump forward n songs in the queue (tap on an Up Next entry)."""
+    n = max(1, min(int(n), 50))
+    for _ in range(n):
+        spotify_api("POST", "/me/player/next")
+        time.sleep(0.12)                                   # keep the skips in order
+    return {"skipped": n}
+
+
+def spotify_replace(uris):
+    """Spotify can't remove or reorder queue items, so replay: current song (same position) + the edited list."""
+    if not uris or len(uris) > 100 or not all(SPOTIFY_URI.match(u) for u in uris):
+        raise RuntimeError("invalid song list")
+    st = spotify_api("GET", "/me/player")
+    if not st or not st.get("item") or not st.get("device"):
+        raise RuntimeError("Spotify isn't playing on any device right now")
+    dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
+    if st.get("shuffle_state"):                            # a shuffled list would scramble the new order
+        spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
+    pos = (st.get("progress_ms") or 0) + (400 if st.get("is_playing") else 0)
+    spotify_api("PUT", f"/me/player/play?device_id={dev}",
+                {"uris": [st["item"]["uri"]] + uris, "position_ms": pos})
+    if not st.get("is_playing"):
+        spotify_api("PUT", f"/me/player/pause?device_id={dev}")
+    return {"count": len(uris)}
 
 
 def spotify_login(client_id):
@@ -133,7 +191,7 @@ def spotify_login(client_id):
     auth = "https://accounts.spotify.com/authorize?" + urllib.parse.urlencode(dict(
         client_id=client_id, response_type="code", redirect_uri=REDIRECT, state=state,
         code_challenge_method="S256", code_challenge=challenge,
-        scope="playlist-read-private playlist-read-collaborative user-library-read user-read-playback-state user-read-currently-playing"))
+        scope="playlist-read-private playlist-read-collaborative user-library-read user-read-playback-state user-read-currently-playing user-modify-playback-state"))
     got = {}
 
     class H(http.server.BaseHTTPRequestHandler):
@@ -226,6 +284,10 @@ def main(argv):
             res = applemusic_playlists()
         elif cmd == "queue" and argv[2] == "spotify":
             res = spotify_queue()
+        elif cmd == "spotify-skip":
+            res = spotify_skip(argv[2])
+        elif cmd == "spotify-replace":
+            res = spotify_replace(argv[2:])
         elif cmd == "tracks" and argv[2] == "subsonic":
             res = subsonic_tracks(argv[3])
         elif cmd == "spotify-login":

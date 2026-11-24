@@ -92,6 +92,50 @@ struct GeneralPane: View {
                 Text("Show controls opens the scrubber with play, skip and the queue. Swipe left or right to skip songs.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("While paused") {
+                Picker("The bar shows", selection: $store.c.pausedShows) {
+                    Text("The lyrics (as now)").tag("lyrics")
+                    Text("Media controls").tag("controls")
+                    Text("Title and artist").tag("title")
+                    Text("Rotating quotes").tag("quotes")
+                    Text("My own phrase").tag("phrase")
+                }
+                if store.c.pausedShows != "lyrics" {
+                    LabeledSlider(title: "After pausing for", value: $store.c.pausedDelay, range: 0...15, step: 1, format: secs)
+                }
+                switch store.c.pausedShows {
+                case "controls":
+                    Text("The scrubber and buttons stay up until you play again.").font(.caption).foregroundStyle(.secondary)
+                case "phrase":
+                    TextField("Phrase", text: $store.c.pausedPhrase, prompt: Text("Paused · {title}"))
+                    Text("{title} and {artist} are filled in.").font(.caption).foregroundStyle(.secondary)
+                case "quotes":
+                    LabeledSlider(title: "Next quote every", value: $store.c.pausedQuoteSeconds, range: 4...60, step: 1, format: secs)
+                    Toggle("Include the built-in music quotes", isOn: $store.c.pausedBuiltinQuotes)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Your quotes, one per line")
+                        TextEditor(text: $store.c.pausedQuotes)
+                            .font(.body).frame(minHeight: 70).scrollContentBackground(.hidden)
+                            .padding(4).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                        Text("Write \"quote — author\" to show who said it.").font(.caption).foregroundStyle(.secondary)
+                    }
+                default: EmptyView()
+                }
+            }
+            Section("Touch Bar sleep") {
+                Picker("Let the Touch Bar sleep", selection: $store.c.barSleepMinutes) {
+                    Text("Like macOS (after about a minute)").tag(0.0)
+                    Text("After 2 minutes").tag(2.0); Text("After 5 minutes").tag(5.0)
+                    Text("After 10 minutes").tag(10.0); Text("After 15 minutes").tag(15.0)
+                    Text("After 30 minutes").tag(30.0); Text("After 1 hour").tag(60.0)
+                    Text("Never").tag(-1.0)
+                }
+                if store.c.barSleepMinutes != 0 {
+                    Toggle("Only keep it awake while music plays", isOn: $store.c.barAwakeOnlyWhilePlaying)
+                    Text("Counted from your last keyboard or trackpad use. macOS has no separate Touch Bar timer, so this also keeps your screen from sleeping for that long.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Auto-hide after") {
                 LabeledSlider(title: "Media controls", value: $store.c.mediaAutoHide, range: 3...30, step: 1, format: secs)
                 LabeledSlider(title: "Playlist picker", value: $store.c.pickerAutoHide, range: 5...60, step: 1, format: secs)
@@ -159,6 +203,10 @@ struct AppearancePane: View {
                     Text("Solid colour").tag("solid")
                 }
                 .pickerStyle(.segmented)
+                if store.c.backgroundStyle != "solid" {
+                    Text("With a rotating wallpaper the bar goes black: macOS doesn't say which picture is showing.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if store.c.backgroundStyle == "solid" {
                     ColorPicker("Colour", selection: color, supportsOpacity: false)
                 } else {
@@ -169,6 +217,10 @@ struct AppearancePane: View {
                 }
                 LabeledSlider(title: "Darken", value: $store.c.dimAmount, range: 0...0.7)
                 if store.c.backgroundStyle == "album" {
+                    Picker("After pausing, keep the cover", selection: $store.c.artLinger) {
+                        Text("2 seconds").tag(2.0); Text("10 seconds").tag(10.0); Text("30 seconds").tag(30.0)
+                        Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("Until something else plays").tag(-1.0)
+                    }
                     Text("Uses the current song's cover, blurred. Falls back to your wallpaper when there's no artwork.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

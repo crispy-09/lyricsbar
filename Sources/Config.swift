@@ -55,6 +55,16 @@ struct Config: Codable, Equatable {
     var defaultApp = "subsonic"       // ▶ with nothing loaded: "subsonic" | "spotify" | "applemusic" | "ask"
     var lyricTapAction = "pause"      // tap on the lyrics: "pause" | "controls" | "none"
     var lyricHoldAction = "controls"  // long-press on the lyrics: same choices
+    // While paused (Settings → General)
+    var pausedShows = "lyrics"        // "lyrics" | "controls" | "title" | "quotes" | "phrase"
+    var pausedDelay = 2.0             // seconds paused before switching (quick pauses don't flicker)
+    var pausedPhrase = "Paused · {title}"
+    var pausedQuotes = ""             // your own quotes, one per line ("text — author")
+    var pausedBuiltinQuotes = true
+    var pausedQuoteSeconds = 12.0
+    var artLinger = 2.0               // album-art background stays this long after pausing (-1 = keep it)
+    var barSleepMinutes = 0.0         // Touch Bar sleep: 0 = like macOS (~1 min), -1 = never, else minutes after last use
+    var barAwakeOnlyWhilePlaying = true
     // Discord Rich Presence (Settings → Discord)
     var discordEnabled = false
     var discordAppId = ""             // your Discord application's ID (public, not a secret)

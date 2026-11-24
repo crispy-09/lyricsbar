@@ -75,8 +75,8 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 
 Everything else is in **Settings** (Library window sidebar, or ⌘,):
 
-- **General**: what ▶ starts when nothing is loaded, shuffle, resume, crossfade, lyric gestures, auto-hide timers
-- **Appearance**: background, lyrics, visualizer, buttons
+- **General**: what ▶ starts when nothing is loaded, shuffle, resume, crossfade, lyric gestures, auto-hide timers, Touch Bar sleep, and what the bar shows while paused (lyrics, media controls, title and artist, rotating quotes, or your own phrase)
+- **Appearance**: background (how long the album art stays after pausing), lyrics, visualizer, buttons. With a rotating wallpaper the background is black, because macOS doesn't report which picture is showing
 - **Providers**: the providers shown in the picker, scrobbling, accounts
 - **Pinned Playlists** and **Edit Playlists** (Subsonic)
 
@@ -84,6 +84,8 @@ Everything else is in **Settings** (Library window sidebar, or ⌘,):
 
 - **Subsonic / Navidrome**: sign in with your server URL, username and password. Only a salted token is stored, never the password.
 - **Spotify**: create an app at developer.spotify.com with the redirect URI `http://127.0.0.1:8898/callback`, then paste its Client ID under Providers → Spotify. Playback happens in the Spotify app.
+  - Up Next is editable on the Touch Bar and in the Library (needs Premium). Spotify's API can't remove or reorder queue items, so an edit replays the current song from the same position, followed by your edited list. Shuffle is turned off, and Spotify stops after those songs.
+  - If you connected Spotify before this feature existed, reconnect it once to grant playback control.
 - **Apple Music**: uses the Music app through AppleScript.
 
 ### Scrobbling
