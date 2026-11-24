@@ -11,6 +11,7 @@ LyricsBar takes over the Touch Bar's control strip area with:
 - **Media controls**: a scrubber, skip, like, shuffle/repeat, and a swipeable, reorderable Up Next queue.
 - **A playlist picker** for Subsonic, Spotify and Apple Music, with pinned playlists.
 - **A built-in Subsonic/Navidrome player** with crossfade, an editable queue that survives restarts, Liked Songs (stars), and scrobbling.
+- **Discord Rich Presence** with customizable text ("Listening to …", your own templates, an optional lyric line). It works with the Discord app and Vesktop.
 - **A Library window** for Up Next, full lyrics, search, Liked Songs, albums, artists and playlists, with Settings in the same window.
 
 ## Requirements
@@ -94,13 +95,32 @@ You can scrobble in either of two ways. Pick one per service; using both counts 
 
 A play counts after half the song or 4 minutes, whichever comes first. Plays that can't be sent (offline, server down) are queued and retried every 5 minutes.
 
+### Discord Rich Presence
+
+Settings → **Discord**:
+
+1. Create an application at [discord.com/developers/applications](https://discord.com/developers/applications). Its name is what people see, for example "Listening to **LyricsBar**".
+2. Paste its **Application ID** and switch presence on.
+3. Vesktop users: turn on Rich Presence (arRPC) in Vesktop's settings.
+
+You can customize:
+- the activity type ("Listening to" or "Playing")
+- the two text lines and the picture's hover text, using templates with `{title}` `{artist}` `{album}` `{lyric}` `{player}`
+- what the member list shows
+- the progress bar
+- whether it hides or shows "Paused" when paused
+- which players count. Spotify is skipped by default because it already has its own presence.
+
+Album art is optional. Subsonic cover links contain your login and are never sent, so the cover is looked up on Apple's public iTunes Search instead, which sends only the artist and album name.
+
 ## Privacy and security
 
 - All credentials (the Subsonic token, Spotify tokens, Last.fm session and ListenBrainz token) are kept in a single item in your **login Keychain**. The Python helper receives them on stdin when it runs and never writes them to disk.
 - Subsonic request URLs include an auth token, so LyricsBar's HTTP cache is **memory-only**.
 - `~/.touchbar-lyrics/` holds settings, the saved queue, cached lyrics and the scrobble queue (song names only), and is readable only by you.
 - The visualizer reads LyricsBar's own player directly. For other apps it taps only that app's audio, and only while music plays and the visualizer is on. Audio is analysed for levels and never stored.
-- Network requests go only to your Subsonic server, `lrclib.net`, and Spotify / Last.fm / ListenBrainz if you connect them.
+- Network requests go only to your Subsonic server and `lrclib.net`, plus Spotify / Last.fm / ListenBrainz if you connect them and Apple's iTunes Search if you turn on Discord album art.
+- Discord presence goes over the local Discord socket only, and only while it's switched on.
 
 ## Stable and Beta
 

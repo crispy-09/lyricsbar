@@ -55,6 +55,19 @@ struct Config: Codable, Equatable {
     var defaultApp = "subsonic"       // ▶ with nothing loaded: "subsonic" | "spotify" | "applemusic" | "ask"
     var lyricTapAction = "pause"      // tap on the lyrics: "pause" | "controls" | "none"
     var lyricHoldAction = "controls"  // long-press on the lyrics: same choices
+    // Discord Rich Presence (Settings → Discord)
+    var discordEnabled = false
+    var discordAppId = ""             // your Discord application's ID (public, not a secret)
+    var discordType = "listening"     // "listening" | "playing"
+    var discordLine1 = "{title}"
+    var discordLine2 = "by {artist}"
+    var discordHover = "{album}"      // tooltip on the picture
+    var discordTimestamps = true      // progress bar / time left
+    var discordWhenPaused = "hide"    // "hide" | "show"
+    var discordPlayers = "noSpotify"  // "all" | "own" | "noSpotify" (Spotify already shows its own presence)
+    var discordAlbumArt = false       // look up cover art on Apple's public iTunes Search
+    var discordImage = ""             // fallback picture: an asset name from your Discord app, or an https URL
+    var discordStatusDisplay = "app"  // member list says "Listening to <app name | line 1 | line 2>"
     var pinned: [PinnedPlaylist] = []
 }
 

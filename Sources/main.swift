@@ -2028,6 +2028,24 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                if c.hasPrefix("media") { self.view.setMediaMode(true) }
                                if c.trimmingCharacters(in: .whitespacesAndNewlines) == "apps" { self.view.openApps() }
                                if c.trimmingCharacters(in: .whitespacesAndNewlines) == "arthold" { self.view.artButton.onHold?() }
+                               if c.hasPrefix("discordtest ") {          // test against a fake Discord socket; "discordtest off" undoes it
+                                   let arg = String(c.dropFirst(12)).trimmingCharacters(in: .whitespacesAndNewlines)
+                                   if arg == "off" {
+                                       DiscordPresence.shared.socketOverride = nil
+                                       ConfigStore.shared.c.discordEnabled = false; ConfigStore.shared.c.discordAppId = ""
+                                       ConfigStore.shared.c.discordWhenPaused = "hide"
+                                   } else {
+                                       DiscordPresence.shared.socketOverride = [arg]
+                                       ConfigStore.shared.c.discordEnabled = true; ConfigStore.shared.c.discordAppId = "123456789012345678"
+                                       ConfigStore.shared.c.discordWhenPaused = "show"
+                                   }
+                               }
+                               if c.hasPrefix("discordpreview") {
+                                   let a = DiscordPresence.shared.activity(for: DiscordPresence.shared.snapshot(), cfg)
+                                   let d = a.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: .sortedKeys) }
+                                   try? ((d.map { String(decoding: $0, as: UTF8.self) } ?? "nil") + "\nstatus: " + DiscordPresence.shared.status)
+                                       .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                               }
                                if c.hasPrefix("vizsrc") { try? AudioTap.shared.debugSource.write(toFile: home + "/debug.out", atomically: true, encoding: .utf8) }
                                if c.hasPrefix("library "), let sec = LibSection(rawValue: c.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)) {
                                    LibraryWindow.shared.show(sec)
@@ -2134,6 +2152,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     }
 
     func tick() {
+        DiscordPresence.shared.tick()
         if let d = FileManager.default.contents(atPath: home + "/state.json"), d != lastState,
            let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
             lastState = d

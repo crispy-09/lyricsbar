@@ -13,7 +13,7 @@ final class SettingsWindow {
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general = "General", appearance = "Appearance", providers = "Providers"
-    case pinned = "Pinned Playlists", subsonic = "Subsonic Playlists"
+    case pinned = "Pinned Playlists", subsonic = "Subsonic Playlists", discord = "Discord"
     var id: String { rawValue }
     var icon: String {
         switch self {
@@ -22,6 +22,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .providers: return "square.stack.3d.up"
         case .pinned: return "pin"
         case .subsonic: return "music.note.list"
+        case .discord: return "bubble.left.and.bubble.right"
         }
     }
 }
@@ -36,6 +37,7 @@ struct SettingsDetail: View {
         case .providers: ProvidersPane()
         case .pinned: PinnedPane()
         case .subsonic: SubsonicPane()
+        case .discord: DiscordPane()
         }
     }
 }
@@ -764,5 +766,77 @@ struct ScrobbleSections: View {
             catch { lbStatus = error.localizedDescription }
             lbBusy = false
         }
+    }
+}
+
+
+// MARK: - Discord Rich Presence
+
+struct DiscordPane: View {
+    @ObservedObject var store = ConfigStore.shared
+    @ObservedObject var presence = DiscordPresence.shared
+    @State private var snap: DiscordPresence.Snapshot?
+    let refresh = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Show what I'm listening to on Discord", isOn: $store.c.discordEnabled)
+                LabeledContent("Status", value: presence.status)
+                TextField("Application ID", text: $store.c.discordAppId, prompt: Text("e.g. 1234567890123456789"))
+                Text("""
+                    Discord needs an application to show presence under. Create one at discord.com/developers/applications \
+                    (name it what you want people to see, like "LyricsBar"), then copy its Application ID here. \
+                    Works with the Discord app and with Vesktop (turn on Rich Presence / arRPC in Vesktop's settings).
+                    """).font(.caption).foregroundStyle(.secondary)
+            }
+            Section("What it says") {
+                Picker("Activity", selection: $store.c.discordType) {
+                    Text("Listening to …").tag("listening"); Text("Playing …").tag("playing")
+                }
+                TextField("First line", text: $store.c.discordLine1)
+                TextField("Second line", text: $store.c.discordLine2)
+                TextField("Picture hover text", text: $store.c.discordHover)
+                Picker("Member list shows", selection: $store.c.discordStatusDisplay) {
+                    Text("App name").tag("app"); Text("First line").tag("details"); Text("Second line").tag("state")
+                }
+                Text("Use \(DiscordPresence.placeholders.joined(separator: " ")) anywhere. {lyric} is the current line (it changes every few seconds; Discord only updates about every 4 s). Empty fields are dropped, so \"by {artist}\" disappears when there's no artist.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Details") {
+                Toggle("Show the progress bar", isOn: $store.c.discordTimestamps)
+                Picker("When paused", selection: $store.c.discordWhenPaused) {
+                    Text("Hide it").tag("hide"); Text("Show \"Paused\"").tag("show")
+                }
+                Picker("Players", selection: $store.c.discordPlayers) {
+                    Text("All except Spotify").tag("noSpotify"); Text("All players").tag("all")
+                    Text("Only LyricsBar's player").tag("own")
+                }
+                Text("Spotify already shows its own Discord presence, so it's skipped by default to avoid showing the song twice.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Show album art (looked up on Apple's public iTunes Search)", isOn: $store.c.discordAlbumArt)
+                TextField("Fallback picture", text: $store.c.discordImage, prompt: Text("asset name or https:// link (optional)"))
+                Text("Your Subsonic covers can't be shown: their links contain your login. The album-art lookup sends only the artist and album name to Apple.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Preview") {
+                if let a = presence.activity(for: snap, store.c) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text((store.c.discordType == "playing" ? "Playing " : "Listening to ") + "<your Discord app's name>")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        if let d = a["details"] as? String { Text(d).font(.body.weight(.semibold)) }
+                        if let s = a["state"] as? String { Text(s).foregroundStyle(.secondary) }
+                        if a["timestamps"] != nil { ProgressView(value: 0.35).frame(maxWidth: 220) }
+                    }
+                } else {
+                    Text(snap == nil ? "Nothing is playing." : "Hidden right now (paused, or this player is excluded).")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Discord")
+        .onAppear { snap = DiscordPresence.shared.snapshot() }
+        .onReceive(refresh) { _ in snap = DiscordPresence.shared.snapshot() }
     }
 }

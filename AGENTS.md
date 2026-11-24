@@ -19,6 +19,11 @@ Notes for coding agents (and humans) working on LyricsBar.
   - Use `txt()` for every user-visible string; it decodes HTML entities that some servers leave in.
 - `Sources/Keychain.swift`: `Creds`, one login-Keychain item (service `com.crispy.lyricsbar`, account `credentials`) holding JSON with the `subsonic`, `spotify`, `lastfm` and `listenbrainz` entries.
 - `Sources/Scrobble.swift`: Last.fm and ListenBrainz clients, plus the `ScrobbleQueue` actor (persisted retry queue).
+- `Sources/DiscordIPC.swift`: a standalone Discord RPC client. It speaks the Unix-socket protocol: handshake, `SET_ACTIVITY`, ping/pong. It works with Discord and with Vesktop's arRPC.
+- `Sources/Discord.swift`: `DiscordPresence`.
+  - It builds the activity from the same sources the bar uses (`state.json`, or `StreamPlayer` when that's in charge).
+  - It's driven from `App.tick()`, evaluates once per second and sends at most once every 4 s (Discord's rate limit).
+  - Never put Subsonic cover URLs in presence: they carry the token.
 - `Sources/Visualizer.swift`: `AudioTap` (FFT into band levels) and `VisualizerView`. The audio source is:
   - LyricsBar's own player: `MTAudioProcessingTap` on each `AVPlayerItem`
   - other apps: a Core Audio process tap on that app's processes
@@ -60,6 +65,8 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `qstate` | Write the queue state |
 | `viz` | Write the visualizer frames and levels |
 | `toast <text>`, `text <s>`, `qpreview` | UI checks |
+| `discordtest <socket>` / `discordtest off` | Turn presence on against a fake Discord socket (test app ID), then back off. This changes the config, so always run `off` afterwards |
+| `discordpreview` | Write the activity that would be sent, plus the status |
 | `mutedtest` | Muted playback self-test (play, next, seek, crossfade, previous, pause, restore). No sound, no scrobbles; the log goes to `debug.out` |
 
 Other signals: `SIGUSR1` toggles the media controls and `SIGUSR2` opens the volume slider.

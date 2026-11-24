@@ -131,7 +131,8 @@ ART = os.path.join(HOME, "artwork.jpg")
 def _publish(p, last_art):
     """Write playback state + artwork for the Touch Bar app."""
     import base64
-    info = {"playing": bool(p.get("playing")), "title": p.get("title", ""), "artist": p.get("artist", ""), "bundle": p.get("bundleIdentifier", "")}
+    info = {"playing": bool(p.get("playing")), "title": p.get("title", ""), "artist": p.get("artist", ""),
+            "album": p.get("album", ""), "bundle": p.get("bundleIdentifier", "")}
     art_key = (info["title"], info["artist"])
     if art_key != last_art and not p.get("artworkData"):
         if os.path.exists(ART): os.remove(ART)   # new track, art not loaded yet
