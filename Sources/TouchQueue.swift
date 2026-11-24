@@ -116,7 +116,7 @@ final class QueueStrip: NSView {
         clearLayer.contentsScale = scale
         clearLayer.contents = renderClear()
         clearLayer.bounds = CGRect(x: 0, y: 0, width: clearW, height: pillH)
-        setPull(0, animated: false)            // a new list starts with Clear tucked away
+        setPull(items.isEmpty ? 0 : pull, animated: false)   // a refresh keeps a revealed (or half-pulled) Clear
         place(animated: false)
         CATransaction.commit()
     }
@@ -204,9 +204,9 @@ final class QueueStrip: NSView {
 
     private func pickUp() {
         guard !moved, startX >= pull, let i = index(at: startX) else { return }
-        if pull > 0 { setPull(0, animated: true) }
         lifted = i; liftOrigin = i
-        grabDX = startX - (xs[i] - offset)
+        grabDX = startX - pull - (xs[i] - offset)   // the finger's spot on the pill once Clear tucks away
+        if pull > 0 { setPull(0, animated: true) }
         let p = pills[i]
         p.cornerRadius = 8
         p.zPosition = 10

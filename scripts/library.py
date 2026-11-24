@@ -156,8 +156,10 @@ def spotify_api(method, path, body=None, _retried=False):
             raise RuntimeError("Spotify only allows queue changes with Premium" + (f" ({msg})" if msg else ""))
         if e.code == 403:
             raise RuntimeError("Spotify won't let this app read that" + (f" ({msg})" if msg else ""))
-        if e.code == 404:
+        if e.code == 404 and path.startswith("/me/player"):
             raise RuntimeError("Spotify isn't playing on any device right now")
+        if e.code == 404:
+            raise RuntimeError("Spotify couldn't find that" + (f" ({msg})" if msg else ""))
         raise RuntimeError(f"Spotify answered {e.code}" + (f": {msg}" if msg else ""))
 
 
@@ -191,15 +193,17 @@ def spotify_jump(uri, hint):
     n = min(found, key=lambda k: abs(k - hint)) + 1
     if n > 50:
         raise RuntimeError("That song is too far down the queue to skip to")
-    vol = _spotify_volume() if n > 1 else None
+    st = spotify_api("GET", "/me/player") or {}
+    dev = urllib.parse.quote((st.get("device") or {}).get("id") or "", safe="")
+    vol = _spotify_volume(st, dev) if n > 1 else None
     if vol is not None:
-        _spotify_volume(0)
+        _spotify_volume(st, dev, 0)
     try:
-        _spotify_skip(n)
+        _spotify_skip(st, n)
     finally:
         if vol is not None:
             time.sleep(0.4)                                # let the last skip land before the sound comes back
-            _spotify_volume(vol)
+            _spotify_volume(st, dev, vol)
     return {"skipped": n}
 
 
@@ -237,27 +241,59 @@ def spotify_queue_playlist(pid):
     return {"queued": len(uris)}
 
 
-def _spotify_volume(v=None):
-    """Spotify.app's own volume through AppleScript (used to keep a paused edit silent). Returns the old value."""
-    script = 'tell application "Spotify" to get sound volume' if v is None else \
-             f'tell application "Spotify" to set sound volume to {int(v)}'
+def _spotify_local(st):
+    """True when Spotify plays in the Spotify app on this Mac, so AppleScript reaches the right player."""
+    d = (st or {}).get("device") or {}
+    if (d.get("type") or "").lower() != "computer":
+        return False
     try:
-        out = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=5).stdout
-        return int(out.strip()) if v is None and out.strip().isdigit() else None
+        if subprocess.run(["/usr/bin/pgrep", "-x", "Spotify"], capture_output=True, timeout=5).returncode != 0:
+            return False                                   # don't let AppleScript launch the app
+        name = subprocess.run(["/usr/sbin/scutil", "--get", "ComputerName"], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
     except Exception:
-        return None
+        return False
+    return bool(name) and name == d.get("name")
 
 
-def _spotify_skip(n):
-    """Press "next" n times in the Spotify app (local and fast); falls back to the Web API."""
+def _spotify_volume(st, dev, v=None):
+    """Read (v=None) or set Spotify's volume: the app's own through AppleScript when it plays here, else the
+    device's through the Web API. Reading returns None when unknown."""
+    if _spotify_local(st):
+        script = 'tell application "Spotify" to get sound volume' if v is None else \
+                 f'tell application "Spotify" to set sound volume to {int(v)}'
+        try:
+            out = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=5).stdout
+            return int(out.strip()) if v is None and out.strip().isdigit() else None
+        except Exception:
+            return None
+    if v is None:
+        p = ((st or {}).get("device") or {}).get("volume_percent")
+        return int(p) if isinstance(p, (int, float)) else None
+    try:
+        spotify_api("PUT", f"/me/player/volume?volume_percent={int(v)}&device_id={dev}")
+    except RuntimeError:
+        pass
+    return None
+
+
+def _spotify_skip(st, n):
+    """Go n songs ahead: the Spotify app's own "next" when it plays here (fast, no rate limit), else the API."""
+    n = int(n)
     if n <= 0:
         return
-    script = f'tell application "Spotify"\nrepeat {int(n)} times\nnext track\ndelay 0.08\nend repeat\nend tell'
-    r = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=60)
-    if r.returncode != 0:                                  # no Automation permission
-        for _ in range(n):
-            spotify_api("POST", "/me/player/next")
-            time.sleep(0.12)
+    if _spotify_local(st):
+        script = f'tell application "Spotify"\nrepeat {n} times\nnext track\ndelay 0.08\nend repeat\nend tell'
+        try:
+            if subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True,
+                              timeout=60).returncode == 0:
+                return
+        except Exception:
+            pass
+        raise RuntimeError("Couldn't control the Spotify app. Allow LyricsBar under System Settings → Privacy → Automation")
+    for _ in range(n):
+        spotify_api("POST", "/me/player/next")
+        time.sleep(0.12)
 
 
 def _queue_uris():
@@ -280,23 +316,23 @@ def spotify_replace(uris, keep_current=True):
         raise RuntimeError("Spotify isn't playing on any device right now")
     playing = bool(st.get("is_playing"))
     dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
-    cur = st["item"]["uri"]
+    cur = st["item"].get("uri") or ""
+    if not SPOTIFY_URI.match(cur):                          # check before touching anything
+        raise RuntimeError("Spotify can't re-queue the song that's playing (a local file), so Up Next can't be edited now")
     pos = st.get("progress_ms") or 0
-    vol = _spotify_volume()
-    _spotify_volume(0)
+    t0 = time.time()
+    vol = _spotify_volume(st, dev)
+    if vol is not None:                                    # never mute without knowing what to restore
+        _spotify_volume(st, dev, 0)
     try:
         if st.get("shuffle_state"):                        # a shuffled list would scramble the new order
             spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
-        if not keep_current and not uris:                  # cleared at the end of a song: skip past it all and stop
-            _spotify_skip(len(_queue_uris()) + 1)
-            spotify_api("PUT", f"/me/player/pause?device_id={dev}")
-            spotify_api("PUT", f"/me/player/seek?position_ms=0&device_id={dev}")
-            return {"count": 0}
-        play = ([cur] + uris) if keep_current else uris
+        # cleared at the end of a song: nothing follows, so leave the finished song stopped at its start
+        play = ([cur] + uris) if keep_current or not uris else uris
         for _ in range(3):                                 # the queue listing shows at most ~20 songs at a time
             q = _queue_uris()
             if q:
-                _spotify_skip(len(q))
+                _spotify_skip(st, len(q))
                 time.sleep(0.4)
             spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": play})
             time.sleep(0.6)
@@ -306,15 +342,25 @@ def spotify_replace(uris, keep_current=True):
                 break
         else:
             raise RuntimeError("Spotify didn't take that change. Try again")
-        if not playing:
+        if not keep_current and not uris:
             spotify_api("PUT", f"/me/player/pause?device_id={dev}")
-        if keep_current:
+            playing = True                                 # already paused on purpose
+            spotify_api("PUT", f"/me/player/seek?position_ms=0&device_id={dev}")
+        elif keep_current:
             # the desktop app ignores position_ms and restarts the song, so seek back to where it was
-            spotify_api("PUT", f"/me/player/seek?position_ms={pos}&device_id={dev}")
+            # (plus the time this took, if it was playing)
+            now = pos + (int((time.time() - t0) * 1000) if playing else 0)
+            spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
     finally:
+        # whatever happened, a song that was paused must not come back playing out loud
+        if not playing:
+            try:
+                spotify_api("PUT", f"/me/player/pause?device_id={dev}")
+            except RuntimeError:
+                pass
         if vol is not None:
             time.sleep(0.4)                                # let the seek/pause land before the sound comes back
-            _spotify_volume(vol)
+            _spotify_volume(st, dev, vol)
     return {"count": len(uris)}
 
 

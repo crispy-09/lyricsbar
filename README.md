@@ -103,6 +103,9 @@ Spotify's Web API can only read the queue and add to it. It has no way to remove
 - **The original playlist doesn't continue.** After an edit, Spotify plays your edited list instead of the playlist or album you started, then its autoplay may continue with similar songs. Shuffle is turned off.
 - **Skipped songs may show up in Spotify's recently played.** They're skipped within a second, so they don't count as plays.
 - **Local files** in the queue can't be re-queued, so a queue containing them can't be edited.
+- **Only the first ~20 songs can be kept.** Spotify only reports about 20 upcoming songs, so editing a longer queue (for example after queueing a big playlist) drops the songs past those.
+- **Edits waiting for the song's end are dropped** if you start other music (another album, a playlist from the bar, or another app) before the song ends.
+- **When Spotify plays on another device** (a phone or speaker), LyricsBar uses that device's volume and Spotify's "next" instead of the Mac's Spotify app, which is slower.
 - **The queue Spotify reports can lag.** Up Next on the bar reloads when the song changes and every few seconds, but Spotify sometimes takes a moment to catch up.
 
 - **Apple Music**: uses the Music app through AppleScript.

@@ -23,9 +23,12 @@ final class SpotifyQueue: ObservableObject {
     @Published private(set) var busy = false
     /// Edits are waiting for the current song to end.
     @Published private(set) var pending = false
-    private var pendingTitle = ""
+    private var pendingTitle = ""               // the song the edits wait for ("" = learn it once things settle)
+    private var expectedNext: String?           // what Spotify itself would play next (its real queue's first song)
+    private var lastRemaining = Double.infinity // seconds left in pendingTitle when last seen
+    private var settleUntil = Date.distantPast  // right after a send, Now Playing is still catching up
     private var pendingTimer: Timer?
-    private var pausedSince: Date?, changedSince: Date?   // Now Playing blips for a moment; act only on steady states
+    private var pausedSince: Date?, changedSince: Date?, awaySince: Date?   // act only on steady states
 
     private var gen = 0                         // only the newest refresh may publish
     private var waiting: [() -> Void] = []      // refresh callers; all called when the newest one lands
@@ -104,8 +107,9 @@ final class SpotifyQueue: ObservableObject {
     func remove(id: UUID, _ done: ((String?) -> Void)? = nil) {
         guard let i = items.firstIndex(where: { $0.id == id }) else { done?("That song isn't in the queue any more"); return }
         guard canReplay(done) else { return }
+        let next = items.first?.title
         items.remove(at: i)
-        replay(done)
+        replay(next, done)
     }
 
     func reorder(_ ids: [UUID], _ done: ((String?) -> Void)? = nil) {
@@ -113,8 +117,9 @@ final class SpotifyQueue: ObservableObject {
         let new = ids.compactMap { byId[$0] }
         guard new.count == items.count, new.map(\.id) != items.map(\.id) else { return }
         guard canReplay(done) else { refreshSoon(); return }
+        let next = items.first?.title
         items = new
-        replay(done)
+        replay(next, done)
     }
 
     private func canReplay(_ done: ((String?) -> Void)?) -> Bool {
@@ -127,15 +132,31 @@ final class SpotifyQueue: ObservableObject {
 
     /// Leaves only the current song (and Spotify's autoplay after it).
     func clear(_ done: ((String?) -> Void)? = nil) {
-        guard !items.isEmpty, canReplay(done) else { return }
+        guard !items.isEmpty else { done?("Up Next is already empty"); return }
+        guard canReplay(done) else { return }
+        let next = items.first?.title
         items = []
-        replay(done)
+        replay(next, done)
     }
 
-    private func replay(_ done: ((String?) -> Void)?) {
+    /// Forget edits that are still waiting (the user started other music) and show Spotify's real queue.
+    func cancelPending() {
+        guard pending else { return }
+        stopPending()
+        refreshSoon()
+    }
+
+    /// `realNext`: the song Spotify itself would play next, before this edit (nil if unknown).
+    private func replay(_ realNext: String? = nil, _ done: ((String?) -> Void)?) {
         if let s = DiscordPresence.shared.snapshot(), s.bundle == "com.spotify.client", s.playing {
             // playing: don't interrupt the song; send the edit when it's about to end
-            if !pending { pendingTitle = s.title }
+            if !pending {
+                // while a send is landing, Now Playing may still show the old song: learn it later
+                pendingTitle = busy ? "" : s.title
+                expectedNext = busy ? nil : realNext
+                lastRemaining = .infinity
+                pausedSince = nil; changedSince = nil; awaySince = nil
+            }
             pending = true
             if pendingTimer == nil {
                 let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkPending() }
@@ -157,21 +178,45 @@ final class SpotifyQueue: ObservableObject {
     /// Sends the held edits when the song is about to end, when it changed anyway (skipped), or when paused.
     private func checkPending() {
         guard pending, !busy else { return }
-        guard let s = DiscordPresence.shared.snapshot(), s.bundle == "com.spotify.client" else { return }
         let now = Date()
+        guard now >= settleUntil else { return }
+        guard let s = DiscordPresence.shared.snapshot(), s.bundle == "com.spotify.client" else {
+            // the user moved to another player: the held edits no longer apply
+            awaySince = awaySince ?? now
+            if now.timeIntervalSince(awaySince!) >= 5 { cancelPending() }
+            return
+        }
+        awaySince = nil
+        if pendingTitle.isEmpty { pendingTitle = s.title; return }
         pausedSince = s.playing ? nil : (pausedSince ?? now)
         changedSince = s.title == pendingTitle ? nil : (changedSince ?? now)
+        if s.title == pendingTitle, s.duration > 0 { lastRemaining = s.duration - s.elapsed }
         let start: Bool
         if let p = pausedSince { guard now.timeIntervalSince(p) >= 2 else { return }; start = false }   // paused: apply silently
-        else if let c = changedSince { guard now.timeIntervalSince(c) >= 0.4 else { return }; start = true }   // song changed
+        else if let c = changedSince {
+            guard now.timeIntervalSince(c) >= 0.4 else { return }
+            // the song ended, or the user pressed Next: Spotify moved on to its own next song. Anything else
+            // means they started other music, which the held edits must not take over.
+            guard s.title == expectedNext || lastRemaining <= 4 else {
+                NSLog("LyricsBar: other Spotify music started; dropping held queue edits")
+                pausedSince = nil; changedSince = nil
+                cancelPending()
+                return
+            }
+            start = true
+        }
         else if s.duration > 0 && s.duration - s.elapsed <= 1.5 { start = true }
         else { return }
         NSLog("LyricsBar: sending held Spotify edits (%@)", pausedSince != nil ? "paused" : changedSince != nil ? "song changed" : "song ending")
         pausedSince = nil; changedSince = nil
         stopPending()
         if start {
+            let first = items.first?.id
             send(["spotify-replace", "--start"] + items.map(\.uri)) { [weak self] e in
-                if e == nil, let self, !self.items.isEmpty { self.items.removeFirst() }   // it's playing now
+                guard let self else { return }
+                self.settleUntil = Date().addingTimeInterval(2.5)
+                // the first song is playing now (unless the user already removed or moved it meanwhile)
+                if e == nil, let first, self.items.first?.id == first { self.items.removeFirst() }
                 if let e { NotificationCenter.default.post(name: .lyricsBarToast, object: e) }
             }
         } else {

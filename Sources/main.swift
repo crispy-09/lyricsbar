@@ -8,8 +8,6 @@ import AudioToolbox
 import AVFoundation
 import MediaPlayer
 import Combine
-import IOKit
-import IOKit.pwr_mgt
 
 let home = (NSHomeDirectory() as NSString).appendingPathComponent(".touchbar-lyrics")
 /// Apple Silicon Homebrew, Intel Homebrew, or anywhere on PATH (same order as lyricsd.py).
@@ -1807,7 +1805,11 @@ final class BarView: NSView {
     func queueSpotifyPlaylist(_ id: String, _ name: String) {
         closePicker()
         guard bundleId == "com.spotify.client" else { toast("Play something in Spotify first", seconds: 2.5); return }
-        toast("Queuing \(name)…", seconds: 6)
+        guard !SpotifyQueue.shared.busy else { toast("Still saving your Up Next changes. Try again in a moment", seconds: 3); return }
+        // Up Next edits still waiting for the song's end would skip these new songs away: drop them
+        let dropped = SpotifyQueue.shared.pending
+        SpotifyQueue.shared.cancelPending()
+        toast("Queuing \(name)…" + (dropped ? " (unsaved Up Next changes dropped)" : ""), seconds: 6)
         libraryJSON(["spotify-queue-playlist", spotifySafe(id)]) { [weak self] obj, err in
             guard let self else { return }
             if let n = (obj as? [String: Any])?["queued"] as? Int {
@@ -1823,6 +1825,7 @@ final class BarView: NSView {
         closePicker()
         toast("Loading \(name)…", seconds: 3)
         if provider == "spotify" {
+            SpotifyQueue.shared.cancelPending()          // held Up Next edits belong to the music being replaced
             StreamPlayer.shared.stop()
             if cfg.pauseOthers && bundleId != "com.spotify.client" { run(mediaControl, ["pause"]) }
             let uri = spotifySafe(id)
@@ -2197,7 +2200,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                        guard case .success(let list) = await loadPlaylists("spotify") else { return }
                                        if let i = Int(arg), list.indices.contains(i) {
                                            libraryJSON(["spotify-queue-playlist", spotifySafe(list[i].id)]) { obj, err in
-                                               try? "queued \(list[i].name): \(String(describing: obj ?? err))"
+                                               try? "queued \(list[i].name): \(obj.map { String(describing: $0) } ?? err ?? "?")"
                                                    .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
                                            }
                                        } else {
