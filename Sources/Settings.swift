@@ -217,11 +217,11 @@ struct AppearancePane: View {
                     LabeledSlider(title: "Saturation", value: $store.c.saturation, range: 0...2.5)
                 }
                 LabeledSlider(title: "Darken", value: $store.c.dimAmount, range: 0...0.7)
+                Picker("After pausing, keep the cover for", selection: $store.c.artLinger) {
+                    Text("3 seconds").tag(3.0); Text("10 seconds").tag(10.0); Text("30 seconds").tag(30.0)
+                    Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("Until something else plays").tag(-1.0)
+                }
                 if store.c.backgroundStyle == "album" {
-                    Picker("After pausing, keep the cover", selection: $store.c.artLinger) {
-                        Text("2 seconds").tag(2.0); Text("10 seconds").tag(10.0); Text("30 seconds").tag(30.0)
-                        Text("1 minute").tag(60.0); Text("5 minutes").tag(300.0); Text("Until something else plays").tag(-1.0)
-                    }
                     Text("Uses the current song's cover, blurred. Falls back to your wallpaper when there's no artwork.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

@@ -1443,9 +1443,18 @@ final class BarView: NSView {
 
     func setPlaying(_ playing: Bool) {
         isPlaying = playing
-        artButton.baseAlpha = playing ? 1 : 0.45
         playBtn.image = symbol(playing ? "pause.fill" : "play.fill", 15)
         pickerPlayBtn?.image = playBtn.image
+    }
+
+    /// Faded cover = paused for longer than the art timeout (App.updateBackgroundMode decides).
+    private var artDimmed = false
+    func setArtDimmed(_ dim: Bool) {
+        guard dim != artDimmed else { return }
+        artDimmed = dim
+        let a: CGFloat = dim ? 0.45 : 1
+        NSAnimationContext.runAnimationGroup({ ctx in ctx.duration = 0.6; artButton.animator().alphaValue = a },
+                                           completionHandler: { [weak self] in self?.artButton.baseAlpha = a })
     }
 
     var hasArtwork = false
@@ -2385,13 +2394,15 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
 
     /// Album-art background while playing; wallpaper again `artLinger` seconds after playback stops (-1 = keep it).
     func updateBackgroundMode() {
+        if view.isPlaying { stoppedSince = nil } else if stoppedSince == nil { stoppedSince = Date() }
+        // the cover (button and background) stays up for `artLinger` after pausing, then fades
+        let lingering = view.isPlaying || cfg.artLinger < 0 || Date().timeIntervalSince(stoppedSince ?? Date()) <= cfg.artLinger
+        view.setArtDimmed(!lingering)
         guard cfg.backgroundStyle == "album" else { if artBG { artBG = false }; return }
         if view.isPlaying {
-            stoppedSince = nil
             if !artBG && FileManager.default.fileExists(atPath: home + "/artwork.jpg") { artBG = true; refreshWallpaperNow() }
-        } else {
-            if stoppedSince == nil { stoppedSince = Date() }
-            if artBG && cfg.artLinger >= 0 && Date().timeIntervalSince(stoppedSince!) > cfg.artLinger { artBG = false; refreshWallpaperNow() }
+        } else if artBG && !lingering {
+            artBG = false; refreshWallpaperNow()
         }
     }
 

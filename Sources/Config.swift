@@ -62,7 +62,7 @@ struct Config: Codable, Equatable {
     var pausedQuotes = ""             // your own quotes, one per line ("text — author")
     var pausedBuiltinQuotes = true
     var pausedQuoteSeconds = 60.0     // whole minutes, at least 1
-    var artLinger = 2.0               // album-art background stays this long after pausing (-1 = keep it)
+    var artLinger = 10.0              // the cover (button + album background) stays this long after pausing (-1 = keep it)
     var barSleepMinutes = 0.0         // Touch Bar sleep: 0 = like macOS (~1 min), -1 = never, else minutes after last use
     var barAwakeOnlyWhilePlaying = true
     // Discord Rich Presence (Settings → Discord)
@@ -109,6 +109,8 @@ final class ConfigStore: ObservableObject {
             for (k, v) in file where defaults[k] != nil { merged[k] = v }
             // older configs only had the tap choice (hold did the other one): keep that behaviour
             if file["lyricHoldAction"] == nil, (file["lyricTapAction"] as? String) == "controls" { merged["lyricHoldAction"] = "pause" }
+            // 2 s was the old default, never a choice: move it to the new 10 s default
+            if (file["artLinger"] as? Double) == 2 { merged["artLinger"] = 10.0 }
             // quote rotation is now whole minutes, at least one
             if let q = file["pausedQuoteSeconds"] as? Double { merged["pausedQuoteSeconds"] = max(60, (q / 60).rounded() * 60) }
         }
