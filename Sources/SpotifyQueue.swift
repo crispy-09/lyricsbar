@@ -108,8 +108,14 @@ final class SpotifyQueue: ObservableObject {
         return true
     }
 
+    /// Leaves only the current song (and Spotify's autoplay after it).
+    func clear(_ done: ((String?) -> Void)? = nil) {
+        guard !items.isEmpty, canReplay(done) else { return }
+        items = []
+        replay(done)
+    }
+
     private func replay(_ done: ((String?) -> Void)?) {
-        guard !items.isEmpty else { done?("Spotify can't empty its queue; skip instead"); refreshSoon(); return }
         if busy {                               // one edit at a time: the latest list goes out next
             replayPending = true
             if let done { pendingDone.append(done) }

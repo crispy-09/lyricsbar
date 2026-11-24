@@ -87,6 +87,9 @@ Playlists are managed in the Library's **Playlists** section. Pinned playlists a
 - **Subsonic / Navidrome**: sign in with your server URL, username and password. Only a salted token is stored, never the password.
 - **Spotify**: create an app at developer.spotify.com with the redirect URI `http://127.0.0.1:8898/callback`, then paste its Client ID under Providers → Spotify. Playback happens in the Spotify app.
   - Up Next is editable on the Touch Bar and in the Library (needs Premium). Spotify's API can't remove or reorder queue items, so an edit replays the current song from the same position, followed by your edited list. Shuffle is turned off, and afterwards Spotify doesn't continue with the rest of the original playlist; its autoplay may continue with similar songs.
+  - Edits also work while paused. Spotify is muted for the moment it takes, and the song stays paused.
+  - "Play Now" skips to the song with Spotify muted, so you don't hear the songs in between. **Clear** leaves just the current song.
+  - Spotify ignores edits to its own autoplay suggestions (the songs it adds after a list ends). LyricsBar checks each edit and tells you when that happens.
   - If you connected Spotify before this feature existed, reconnect it once to grant playback control.
 - **Apple Music**: uses the Music app through AppleScript.
 

@@ -177,8 +177,10 @@ def spotify_queue():
 
 
 def spotify_jump(uri, hint):
-    """Play a queued song now. Finds it in the queue as it is *now* (a song may have ended since the list
-    was shown) and skips exactly that far; `hint` picks the right copy when the same song is queued twice."""
+    """Play a queued song now. Spotify's API only has "next", so skip to it, with Spotify muted while it
+    passes the songs in between (one at a time was audible). Skipping keeps Spotify's own queue and playlist
+    intact; replaying from the target confuses Spotify's queue listing. Finds the song in the queue as it is
+    *now*; `hint` picks the right copy when the same song is queued twice."""
     if not LISTED_URI.match(uri):
         raise RuntimeError("invalid song")
     hint = int(hint)
@@ -186,12 +188,24 @@ def spotify_jump(uri, hint):
     found = [i for i, u in enumerate(q) if u == uri]
     if not found:
         raise RuntimeError("That song isn't in Spotify's queue any more")
-    n = min(found, key=lambda i: abs(i - hint)) + 1
+    n = min(found, key=lambda k: abs(k - hint)) + 1
     if n > 50:
         raise RuntimeError("That song is too far down the queue to skip to")
-    for _ in range(n):
-        spotify_api("POST", "/me/player/next")
-        time.sleep(0.12)                                   # keep the skips in order
+    vol = _spotify_volume() if n > 1 else None
+    if vol is not None:
+        _spotify_volume(0)
+    try:
+        # the Spotify app's own "next track": local, quick, and no API rate limit
+        script = f'tell application "Spotify"\nrepeat {n} times\nnext track\ndelay 0.08\nend repeat\nend tell'
+        r = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:                              # no Automation permission: fall back to the API
+            for _ in range(n):
+                spotify_api("POST", "/me/player/next")
+                time.sleep(0.12)
+    finally:
+        if vol is not None:
+            time.sleep(0.4)                                # let the last skip land before the sound comes back
+            _spotify_volume(vol)
     return {"skipped": n}
 
 
@@ -229,26 +243,56 @@ def spotify_queue_playlist(pid):
     return {"queued": len(uris)}
 
 
+def _spotify_volume(v=None):
+    """Spotify.app's own volume through AppleScript (used to keep a paused edit silent). Returns the old value."""
+    script = 'tell application "Spotify" to get sound volume' if v is None else \
+             f'tell application "Spotify" to set sound volume to {int(v)}'
+    try:
+        out = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=5).stdout
+        return int(out.strip()) if v is None and out.strip().isdigit() else None
+    except Exception:
+        return None
+
+
 def spotify_replace(uris):
-    """Spotify can't remove or reorder queue items, so replay: current song (same position) + the edited list."""
-    if not uris or len(uris) > 100 or not all(SPOTIFY_URI.match(u) for u in uris):
+    """Spotify can't remove or reorder queue items, so replay: current song (same position) + the edited list.
+    An empty list clears the queue (only the current song is left)."""
+    if len(uris) > 100 or not all(SPOTIFY_URI.match(u) for u in uris):
         raise RuntimeError("invalid song list")
     st = spotify_api("GET", "/me/player")
     if not st or not st.get("item") or not st.get("device"):
         raise RuntimeError("Spotify isn't playing on any device right now")
-    if not st.get("is_playing"):                           # replaying would start the audio
-        raise RuntimeError("Resume Spotify to edit Up Next")
+    playing = bool(st.get("is_playing"))
+    before = [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t][:6]
     dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
     if st.get("shuffle_state"):                            # a shuffled list would scramble the new order
         spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
     t0 = time.time()
     pos = st.get("progress_ms") or 0
-    spotify_api("PUT", f"/me/player/play?device_id={dev}",
-                {"uris": [st["item"]["uri"]] + uris, "position_ms": pos})
-    # the desktop app ignores position_ms and restarts the song, so seek back to where it was
-    time.sleep(0.6)
-    now = pos + int((time.time() - t0) * 1000)
-    spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
+    # paused: replaying starts playback, so mute Spotify for that moment and pause again before unmuting
+    vol = None if playing else _spotify_volume()
+    if vol is not None:
+        _spotify_volume(0)
+    try:
+        spotify_api("PUT", f"/me/player/play?device_id={dev}",
+                    {"uris": [st["item"]["uri"]] + uris, "position_ms": pos})
+        # the desktop app ignores position_ms and restarts the song, so seek back to where it was
+        time.sleep(0.6)
+        if not playing:
+            spotify_api("PUT", f"/me/player/pause?device_id={dev}")
+        now = pos + (int((time.time() - t0) * 1000) if playing else 0)
+        spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
+    finally:
+        if vol is not None:
+            time.sleep(0.3)                                # let the pause land before the sound comes back
+            _spotify_volume(vol)
+    # Spotify answers OK but ignores the new list in some states (seen while it plays autoplay suggestions
+    # after a list ended), so check that the queue really changed
+    if before[:len(uris[:6])] != uris[:6]:
+        time.sleep(0.5)
+        after = [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t][:6]
+        if after == before:
+            raise RuntimeError("Spotify ignored that change. It doesn't let apps edit its autoplay suggestions")
     return {"count": len(uris)}
 
 
