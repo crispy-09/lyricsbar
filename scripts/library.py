@@ -264,8 +264,10 @@ def _queue_uris():
     return [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t]
 
 
-def spotify_replace(uris):
+def spotify_replace(uris, keep_current=True):
     """Set Up Next to exactly `uris` (empty = clear), keeping the current song where it is.
+    keep_current=False is used at the end of a song (and for Play Now): play `uris` straight away instead,
+    or stop if it's empty.
 
     Spotify's Web API can only add to the queue. Songs added with "Add to queue" sit in a separate queue
     that survives starting new music, so replaying a new list alone doesn't remove them. So, with Spotify
@@ -285,23 +287,30 @@ def spotify_replace(uris):
     try:
         if st.get("shuffle_state"):                        # a shuffled list would scramble the new order
             spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
+        if not keep_current and not uris:                  # cleared at the end of a song: skip past it all and stop
+            _spotify_skip(len(_queue_uris()) + 1)
+            spotify_api("PUT", f"/me/player/pause?device_id={dev}")
+            spotify_api("PUT", f"/me/player/seek?position_ms=0&device_id={dev}")
+            return {"count": 0}
+        play = ([cur] + uris) if keep_current else uris
         for _ in range(3):                                 # the queue listing shows at most ~20 songs at a time
             q = _queue_uris()
             if q:
                 _spotify_skip(len(q))
                 time.sleep(0.4)
-            spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": [cur] + uris})
+            spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": play})
             time.sleep(0.6)
-            after = _queue_uris()
+            after, rest = _queue_uris(), play[1:]
             # done once Up Next starts with the new list (or, for a clear, holds none of the songs we skipped)
-            if (uris and after[:3] == uris[:3]) or (not uris and not set(after[:5]) & set(q)):
+            if (rest and after[:3] == rest[:3]) or (not rest and not set(after[:5]) & set(q)):
                 break
         else:
             raise RuntimeError("Spotify didn't take that change. Try again")
         if not playing:
             spotify_api("PUT", f"/me/player/pause?device_id={dev}")
-        # the desktop app ignores position_ms and restarts the song, so seek back to where it was
-        spotify_api("PUT", f"/me/player/seek?position_ms={pos}&device_id={dev}")
+        if keep_current:
+            # the desktop app ignores position_ms and restarts the song, so seek back to where it was
+            spotify_api("PUT", f"/me/player/seek?position_ms={pos}&device_id={dev}")
     finally:
         if vol is not None:
             time.sleep(0.4)                                # let the seek/pause land before the sound comes back
@@ -414,7 +423,8 @@ def main(argv):
         elif cmd == "spotify-jump":
             res = spotify_jump(argv[2], argv[3])
         elif cmd == "spotify-replace":
-            res = spotify_replace(argv[2:])
+            start = len(argv) > 2 and argv[2] == "--start"   # start the list now instead of keeping the current song
+            res = spotify_replace(argv[3:] if start else argv[2:], keep_current=not start)
         elif cmd == "tracks" and argv[2] == "subsonic":
             res = subsonic_tracks(argv[3])
         elif cmd == "spotify-login":

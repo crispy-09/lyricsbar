@@ -60,6 +60,14 @@ struct LabeledSlider: View {
 struct GeneralPane: View {
     @ObservedObject var store = ConfigStore.shared
     var secs: (Double) -> String = { String(format: "%.0fs", $0) }
+    @ViewBuilder private var sleepChoices: some View {
+        Text("Like macOS (after about a minute)").tag(0.0)
+        Text("After 2 minutes").tag(2.0); Text("After 5 minutes").tag(5.0)
+        Text("After 10 minutes").tag(10.0); Text("After 15 minutes").tag(15.0)
+        Text("After 30 minutes").tag(30.0); Text("After 1 hour").tag(60.0)
+        Text("Never").tag(-1.0)
+    }
+
     var body: some View {
         Form {
             Section("Playback") {
@@ -90,15 +98,9 @@ struct GeneralPane: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Touch Bar sleep") {
-                Picker("Let the Touch Bar sleep", selection: $store.c.barSleepMinutes) {
-                    Text("Like macOS (after about a minute)").tag(0.0)
-                    Text("After 2 minutes").tag(2.0); Text("After 5 minutes").tag(5.0)
-                    Text("After 10 minutes").tag(10.0); Text("After 15 minutes").tag(15.0)
-                    Text("After 30 minutes").tag(30.0); Text("After 1 hour").tag(60.0)
-                    Text("Never").tag(-1.0)
-                }
-                if store.c.barSleepMinutes != 0 {
-                    Toggle("Only keep it awake while music plays", isOn: $store.c.barAwakeOnlyWhilePlaying)
+                Picker("While music plays", selection: $store.c.barSleepMinutes) { sleepChoices }
+                Picker("When nothing plays", selection: $store.c.barSleepIdleMinutes) { sleepChoices }
+                if store.c.barSleepMinutes != 0 || store.c.barSleepIdleMinutes != 0 {
                     Text("Counted from your last keyboard or trackpad use. macOS has no separate Touch Bar timer, so this also keeps your screen from sleeping for that long.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

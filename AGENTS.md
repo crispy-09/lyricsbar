@@ -27,6 +27,7 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `Sources/SpotifyQueue.swift`: Spotify's Up Next, editable in both UIs. Edits go through `library.py spotify-jump` and `spotify-replace`, which replays the current song plus the edited list.
   - IDs stay stable across refreshes, keyed by uri plus occurrence.
   - Edits run one at a time; later edits are merged into the next replay.
+  - While Spotify plays, edits only change `items` and set `pending`; a 0.25 s timer sends them (`spotify-replace --start`, which plays the list instead of replaying the current song) when ≤ 1.5 s remain, when the song changes, or at once (keep-current mode) when paused. Refreshes don't overwrite `items` while pending. Play Now while pending starts the shown list from that song.
   - A replay alone doesn't work: songs added with "Add to queue" live in a separate queue that survives `PUT /me/player/play`. So `spotify_replace` mutes Spotify, skips (AppleScript `next track`) through everything queued, plays the current song + the new list, pauses again if it was paused, seeks back, then unmutes. It checks the result and drains again (up to 3 rounds), since the queue listing shows only ~20 songs.
   - While the bar's Up Next shows Spotify, `followSpotifyQueue()` reloads it on song change and every 6 s.
   - `QueueStrip.onClear`: swiping right at the start of the list reveals a red Clear pill.

@@ -1205,16 +1205,19 @@ final class BarView: NSView {
         queueStrip.onMove = { [weak self] in
             guard let self else { return }
             let ids = self.queueStrip.entries.compactMap(\.uid)
-            if self.stripIsSpotify { SpotifyQueue.shared.reorder(ids) { err in if let err { self.toast(err, seconds: 3) } } }
+            if self.stripIsSpotify { SpotifyQueue.shared.reorder(ids) { err in
+                if let err { self.toast(err, seconds: 3) } else if SpotifyQueue.shared.pending { self.toast("Spotify switches to this after the song", seconds: 2) } } }
             else { StreamPlayer.shared.reorderUpcoming(ids) }
         }
         queueStrip.onClear = { [weak self] in
             guard let self else { return }
             if self.stripIsSpotify {
-                SpotifyQueue.shared.clear { err in if let err { self.toast(err, seconds: 3) } }
+                SpotifyQueue.shared.clear { err in
+                    if let err { self.toast(err, seconds: 3) }
+                    else { self.toast(SpotifyQueue.shared.pending ? "Cleared. Spotify stops after this song" : "Cleared Up Next", seconds: 2) }
+                }
                 self.queueStrip.entries = []
                 self.closePicker()
-                self.toast("Cleared Up Next", seconds: 1.5)
             } else {
                 StreamPlayer.shared.clearUpcoming()
                 self.closePicker()
@@ -1223,7 +1226,8 @@ final class BarView: NSView {
         }
         queueStrip.onRemove = { [weak self] e in
             guard let self, let u = e.uid else { return }
-            if self.stripIsSpotify { SpotifyQueue.shared.remove(id: u) { err in if let err { self.toast(err, seconds: 3) } } }
+            if self.stripIsSpotify { SpotifyQueue.shared.remove(id: u) { err in
+                if let err { self.toast(err, seconds: 3) } else if SpotifyQueue.shared.pending { self.toast("Spotify switches to this after the song", seconds: 2) } } }
             else { StreamPlayer.shared.remove(uid: u) }
         }
         // keep the strip in sync with the player (song changes, Library edits); never mid-drag
@@ -2205,7 +2209,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                }
                                if c.hasPrefix("spq") {                    // Spotify queue: spq [skip N (= play entry N) | remove N | move A B]
                                    let q = SpotifyQueue.shared
-                                   let w = c.split(separator: " ").map(String.init)
+                                   let w = c.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ").map(String.init)
                                    let dump: (String?) -> Void = { err in
                                        q.refresh {
                                            let lines = q.items.enumerated().map { "\($0.offset): \($0.element.title) — \($0.element.artist)" }
@@ -2629,9 +2633,9 @@ final class BarAwake {
             let sinceOurs = lastDeclare.map { now.timeIntervalSince($0) } ?? .infinity
             if idle < sinceOurs - 1.5 { lastReal = now.addingTimeInterval(-idle) }   // a real key/trackpad event
         }
-        let mins = cfg.barSleepMinutes                 // 0 = like macOS, -1 = never, else minutes after last use
+        let mins = playing ? cfg.barSleepMinutes : cfg.barSleepIdleMinutes   // 0 = like macOS, -1 = never, else minutes after last use
         // declaring activity turns the display on, so never while it's asleep or locked
-        let want = mins != 0 && !screensAsleep && !screenLocked() && (playing || !cfg.barAwakeOnlyWhilePlaying)
+        let want = mins != 0 && !screensAsleep && !screenLocked()
             && (mins < 0 || now.timeIntervalSince(lastReal) < mins * 60)
         if want {
             if lastDeclare == nil || now.timeIntervalSince(lastDeclare!) >= 20 {

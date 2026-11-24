@@ -1,7 +1,9 @@
 // Spotify's Up Next, editable from the Touch Bar strip and the Library window.
 // The Web API can read the queue and add to it, but has no remove/reorder/clear: edits (library.py
-// spotify-replace) mute Spotify, skip through the queue to empty it, then replay the current song (same
-// position) followed by the edited list. Needs Spotify Premium and the user-modify-playback-state scope.
+// spotify-replace) mute Spotify, skip through the queue to empty it, then play the edited list.
+// That would interrupt the current song, so while Spotify plays, edits are shown straight away but only
+// sent in the last moments of the song (`pending`), and then start the new list in place of the next song.
+// While paused they're sent at once (silently, keeping the current song and its position). Needs Spotify Premium and the user-modify-playback-state scope.
 import Foundation
 
 final class SpotifyQueue: ObservableObject {
@@ -19,6 +21,11 @@ final class SpotifyQueue: ObservableObject {
     @Published private(set) var error: String?
     @Published private(set) var loaded = false
     @Published private(set) var busy = false
+    /// Edits are waiting for the current song to end.
+    @Published private(set) var pending = false
+    private var pendingTitle = ""
+    private var pendingTimer: Timer?
+    private var pausedSince: Date?, changedSince: Date?   // Now Playing blips for a moment; act only on steady states
 
     private var gen = 0                         // only the newest refresh may publish
     private var waiting: [() -> Void] = []      // refresh callers; all called when the newest one lands
@@ -44,7 +51,8 @@ final class SpotifyQueue: ObservableObject {
             DispatchQueue.main.async {
                 guard let self, g == self.gen else { return }          // a newer refresh will call `waiting`
                 self.loaded = true
-                if let list = obj as? [[String: Any]] {
+                if self.pending {                       // Spotify still has the old queue: keep showing the edited one
+                } else if let list = obj as? [[String: Any]] {
                     self.error = nil
                     var seen: [String: Int] = [:], newIds: [String: UUID] = [:]
                     self.items = list.enumerated().compactMap { i, d in
@@ -81,6 +89,14 @@ final class SpotifyQueue: ObservableObject {
         guard let i = items.firstIndex(where: { $0.id == id }) else { done?("That song isn't in the queue any more"); return }
         guard !busy else { done?("Still saving the last change…"); return }
         let t = items[i]
+        if pending {                            // Spotify's queue isn't the one shown: start the shown list from here
+            let list = Array(items[i...])
+            guard list.allSatisfy(\.replayable) else { done?("Spotify can't re-queue local files"); return }
+            stopPending()
+            items.removeFirst(i + 1)
+            send(["spotify-replace", "--start"] + list.map(\.uri), done)
+            return
+        }
         items.removeFirst(i + 1)                // optimistic
         send(["spotify-jump", t.uri, String(t.rawIndex)], done)
     }
@@ -117,6 +133,53 @@ final class SpotifyQueue: ObservableObject {
     }
 
     private func replay(_ done: ((String?) -> Void)?) {
+        if let s = DiscordPresence.shared.snapshot(), s.bundle == "com.spotify.client", s.playing {
+            // playing: don't interrupt the song; send the edit when it's about to end
+            if !pending { pendingTitle = s.title }
+            pending = true
+            if pendingTimer == nil {
+                let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkPending() }
+                RunLoop.main.add(t, forMode: .common)
+                pendingTimer = t
+            }
+            done?(nil)
+            return
+        }
+        stopPending()
+        sendReplay(done)
+    }
+
+    private func stopPending() {
+        pending = false
+        pendingTimer?.invalidate(); pendingTimer = nil
+    }
+
+    /// Sends the held edits when the song is about to end, when it changed anyway (skipped), or when paused.
+    private func checkPending() {
+        guard pending, !busy else { return }
+        guard let s = DiscordPresence.shared.snapshot(), s.bundle == "com.spotify.client" else { return }
+        let now = Date()
+        pausedSince = s.playing ? nil : (pausedSince ?? now)
+        changedSince = s.title == pendingTitle ? nil : (changedSince ?? now)
+        let start: Bool
+        if let p = pausedSince { guard now.timeIntervalSince(p) >= 2 else { return }; start = false }   // paused: apply silently
+        else if let c = changedSince { guard now.timeIntervalSince(c) >= 0.4 else { return }; start = true }   // song changed
+        else if s.duration > 0 && s.duration - s.elapsed <= 1.5 { start = true }
+        else { return }
+        NSLog("LyricsBar: sending held Spotify edits (%@)", pausedSince != nil ? "paused" : changedSince != nil ? "song changed" : "song ending")
+        pausedSince = nil; changedSince = nil
+        stopPending()
+        if start {
+            send(["spotify-replace", "--start"] + items.map(\.uri)) { [weak self] e in
+                if e == nil, let self, !self.items.isEmpty { self.items.removeFirst() }   // it's playing now
+                if let e { NotificationCenter.default.post(name: .lyricsBarToast, object: e) }
+            }
+        } else {
+            sendReplay(nil)
+        }
+    }
+
+    private func sendReplay(_ done: ((String?) -> Void)?) {
         if busy {                               // one edit at a time: the latest list goes out next
             replayPending = true
             if let done { pendingDone.append(done) }
@@ -137,7 +200,7 @@ final class SpotifyQueue: ObservableObject {
                 if self.replayPending, failed == nil {
                     self.replayPending = false
                     let ds = self.pendingDone; self.pendingDone = []
-                    self.send(["spotify-replace"] + self.items.map(\.uri)) { e in ds.forEach { $0(e) } }
+                    self.replay { e in ds.forEach { $0(e) } }   // held for the song's end again if it's playing
                     return
                 }
                 self.replayPending = false

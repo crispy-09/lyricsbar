@@ -899,13 +899,14 @@ struct SpotifyQueueList: View {
                     Text("Up Next · Spotify · \(q.items.count) songs")
                     Spacer()
                     if q.busy { ProgressView().controlSize(.small) }
+                    if q.pending { Text("Applies when this song ends").font(.caption).foregroundStyle(.secondary) }
                     Button { q.refresh() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless)
                     Button("Clear") { q.clear(report) }.buttonStyle(.borderless).disabled(q.items.isEmpty)
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Drag to reorder · right-click to remove · double-click to play").font(.caption).foregroundStyle(.secondary)
-                    Text("Spotify can't edit its queue directly, so an edit mutes Spotify for a few seconds, skips through the queue to empty it, then plays the current song again from the same spot followed by your edited list. Shuffle turns off, and the original playlist doesn't continue afterwards (needs Premium).")
+                    Text("Spotify can't edit its queue directly, so while a song plays your edits are saved when it ends: Spotify is muted for a moment, the old queue is skipped through, and your edited list starts. While paused, edits are saved straight away and the song stays where it was. Shuffle turns off, and the original playlist doesn't continue afterwards (needs Premium).")
                         .font(.caption).foregroundStyle(.tertiary)
                     if let note { Text(note).font(.caption).foregroundStyle(.orange) }
                 }
