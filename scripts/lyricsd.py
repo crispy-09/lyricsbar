@@ -169,11 +169,12 @@ def _stream():
                 except ValueError:
                     continue
                 last_art = _publish(p, last_art)
-                if not p.get("playing") or not p.get("title"):
+                if not p.get("title"):
                     with _lock: _np["state"] = None
                     last_key = None
                     continue
-                key = (p.get("title"), p.get("artist"), p.get("elapsedTime"), p.get("timestamp"))
+                paused = not p.get("playing")        # keep the song while paused so its lyric line stays up
+                key = (p.get("title"), p.get("artist"), p.get("elapsedTime"), p.get("timestamp"), paused)
                 if key == last_key:
                     continue
                 last_key = key
@@ -185,7 +186,7 @@ def _stream():
                     _np["state"] = dict(track=p["title"], artist=p.get("artist", ""),
                                         album=p.get("album", ""), duration=float(p.get("duration") or 0),
                                         position=float(p.get("elapsedTime") or 0),
-                                        rate=float(p.get("playbackRate") or 1))
+                                        rate=0.0 if paused else float(p.get("playbackRate") or 1))
                     _np["anchor"] = anchor
         except Exception:
             pass

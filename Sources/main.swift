@@ -2329,7 +2329,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         default:   // quotes
             let qs = pausedQuotes()
             guard !qs.isEmpty else { view.clearPaused(); return }
-            let i = Int((since - cfg.pausedDelay) / max(3, cfg.pausedQuoteSeconds)) % qs.count
+            let i = Int((since - cfg.pausedDelay) / max(60, cfg.pausedQuoteSeconds)) % qs.count
             let (text, by) = qs[(i + quoteOffset) % qs.count]
             a.append(NSAttributedString(string: text, attributes: view.lyricAttrs(.white, .regular)))
             if !by.isEmpty { a.append(NSAttributedString(string: "   — " + by, attributes: view.lyricAttrs(dim, .regular))) }
@@ -2452,8 +2452,6 @@ enum BuiltinQuotes {   // a type, not a top-level let: main.swift globals after 
     ("One good thing about music, when it hits you, you feel no pain.", "Bob Marley"),
     ("Music can change the world because it can change people.", "Bono"),
     ("I think music in itself is healing.", "Billy Joel"),
-    ("Take a breath. The song will wait.", ""),
-    ("Paused, not stopped.", ""),
     ]
 }
 

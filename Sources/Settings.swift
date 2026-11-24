@@ -110,7 +110,8 @@ struct GeneralPane: View {
                     TextField("Phrase", text: $store.c.pausedPhrase, prompt: Text("Paused · {title}"))
                     Text("{title} and {artist} are filled in.").font(.caption).foregroundStyle(.secondary)
                 case "quotes":
-                    LabeledSlider(title: "Next quote every", value: $store.c.pausedQuoteSeconds, range: 4...60, step: 1, format: secs)
+                    LabeledSlider(title: "Next quote every", value: $store.c.pausedQuoteSeconds, range: 60...600, step: 60,
+                                  format: { let m = Int(($0 / 60).rounded()); return m == 1 ? "1 min" : "\(m) min" })
                     Toggle("Include the built-in music quotes", isOn: $store.c.pausedBuiltinQuotes)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Your quotes, one per line")
