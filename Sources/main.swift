@@ -12,7 +12,20 @@ import IOKit
 import IOKit.pwr_mgt
 
 let home = (NSHomeDirectory() as NSString).appendingPathComponent(".touchbar-lyrics")
-let mediaControl = "/opt/homebrew/bin/media-control"
+/// Apple Silicon Homebrew, Intel Homebrew, or anywhere on PATH (same order as lyricsd.py).
+let mediaControl: String = {
+    for p in ["/opt/homebrew/bin/media-control", "/usr/local/bin/media-control"] where FileManager.default.isExecutableFile(atPath: p) { return p }
+    for dir in (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":") {
+        let p = "\(dir)/media-control"
+        if FileManager.default.isExecutableFile(atPath: p) { return p }
+    }
+    return "/opt/homebrew/bin/media-control"
+}()
+
+extension Notification.Name {
+    /// A short message for the Touch Bar from code that has no view (e.g. the stream player).
+    static let lyricsBarToast = Notification.Name("lyricsBarToast")
+}
 let barSize = NSSize(width: 1000, height: 30)
 
 // MARK: - Private DFR / NSTouchBar API (same approach as MTMR / Pock)
@@ -390,9 +403,9 @@ final class StreamPlayer: NSObject, ObservableObject {
         cur = pa
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(ended(_:)),
-                                               name: .AVPlayerItemDidPlayToEndTime, object: nil)
+                                               name: AVPlayerItem.didPlayToEndTimeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(failed(_:)),
-                                               name: .AVPlayerItemFailedToPlayToEndTime, object: nil)
+                                               name: AVPlayerItem.failedToPlayToEndTimeNotification, object: nil)
         for p in [pa, pb] {
             obs.append(p.observe(\.timeControlStatus) { [weak self] p, _ in
                 DispatchQueue.main.async { if p === self?.cur { self?.objectWillChange.send(); self?.updateInfo() } }
@@ -634,11 +647,12 @@ final class StreamPlayer: NSObject, ObservableObject {
         let it = AVPlayerItem(url: url)
         attachVisualizerTap(to: it)
         itemObs = it.observe(\.status) { [weak self] it, _ in
-            guard it.status == .failed else { return }
             DispatchQueue.main.async {
                 guard let self, it === self.cur.currentItem else { return }
-                NSLog("LyricsBar: stream failed: \(it.error?.localizedDescription ?? "?") — skipping")
-                self.next()
+                if it.status == .readyToPlay { self.failStreak = 0 }
+                guard it.status == .failed else { return }
+                NSLog("LyricsBar: stream failed: \(it.error?.localizedDescription ?? "?")")
+                self.skipAfterFailure()
             }
         }
         return it
@@ -647,8 +661,22 @@ final class StreamPlayer: NSObject, ObservableObject {
         let item = n.object as? AVPlayerItem
         DispatchQueue.main.async {
             guard item != nil, item === self.cur.currentItem else { return }
-            self.next()
+            self.skipAfterFailure()
         }
+    }
+    /// One bad file: skip it. Several in a row means the server is unreachable (or the login expired):
+    /// pause there and keep the queue, instead of failing through every song and ending playback.
+    private var failStreak = 0
+    private func skipAfterFailure() {
+        failStreak += 1
+        if failStreak >= 3 || followingIndex == nil {
+            failStreak = 0
+            cancelFade(); cur.pause(); save()
+            NotificationCenter.default.post(name: .lyricsBarToast, object: "Can't reach your Subsonic server")
+            objectWillChange.send()
+            return
+        }
+        next()
     }
 
     func play() { guard active else { return }; cur.play() }
@@ -811,10 +839,17 @@ func playSongs(_ songs: [SSong], start: Int = 0, shuffle: Bool = false) {
 // straight to LyricsBar's own player when it holds the queue, and "play" with nothing loaded
 // starts the default app chosen in Settings.
 
+private var systemStateCache: (at: Date, value: (playing: Bool, bundle: String, title: String))?
 func systemState() -> (playing: Bool, bundle: String, title: String) {
-    guard let d = FileManager.default.contents(atPath: home + "/state.json"),
-          let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return (false, "", "") }
-    return (j["playing"] as? Bool ?? false, j["bundle"] as? String ?? "", j["title"] as? String ?? "")
+    // called several times per tick: one read per 100 ms is plenty
+    if let c = systemStateCache, Date().timeIntervalSince(c.at) < 0.1 { return c.value }
+    var v: (playing: Bool, bundle: String, title: String) = (false, "", "")
+    if let d = FileManager.default.contents(atPath: home + "/state.json"),
+       let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+        v = (j["playing"] as? Bool ?? false, j["bundle"] as? String ?? "", j["title"] as? String ?? "")
+    }
+    systemStateCache = (Date(), v)
+    return v
 }
 
 func ownPlayerInCharge() -> Bool {
@@ -947,7 +982,6 @@ final class ScrubBar: NSView {
 
 final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubberFlowLayoutDelegate {
     struct Item { let title: String; var dim = false; var hold: (() -> Void)? = nil; let action: (() -> Void)? }
-    private var visible = NSRange(location: 0, length: 0)
     private var suppressSelectUntil = Date.distantPast
     let scrubber = NSScrubber()
     var items: [Item] = [] { didSet { scrubber.reloadData(); if !items.isEmpty { scrubber.scrollItem(at: 0, to: .none) } } }
@@ -997,8 +1031,8 @@ final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubb
     @objc func pressed(_ g: NSPressGestureRecognizer) {
         guard g.state == .began else { return }
         let p = g.location(in: scrubber)
-        for i in visible.location..<NSMaxRange(visible) where items.indices.contains(i) {
-            guard let v = scrubber.itemViewForItem(at: i) else { continue }
+        for i in items.indices {                   // itemViewForItem is non-nil only for visible items
+            guard items[i].hold != nil, let v = scrubber.itemViewForItem(at: i) else { continue }
             if scrubber.convert(v.bounds, from: v).contains(p), let h = items[i].hold {
                 suppressSelectUntil = Date().addingTimeInterval(1.5)
                 onInteract?(); h(); return
@@ -1013,7 +1047,7 @@ final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubb
         s.selectedIndex = -1
     }
 
-    func scrubber(_ s: NSScrubber, didChangeVisible r: NSRange) { visible = r; onInteract?() }
+    func scrubber(_ s: NSScrubber, didChangeVisibleRange r: NSRange) { onInteract?() }   // scrolling keeps the picker open
 }
 
 final class BarView: NSView {
@@ -1153,6 +1187,7 @@ final class BarView: NSView {
         queueStrip.onLift = { [weak self] up in
             guard let self else { return }
             if !up && self.queueDirty { DispatchQueue.main.async { self.syncQueueStrip() } }
+            if !up && self.stripIsSpotify { DispatchQueue.main.async { self.syncSpotifyStrip() } }
             self.backCap.isHidden = false
             self.backBtn.image = symbol(up ? "trash" : "chevron.left", 14)
             self.backBtn.contentTintColor = .white
@@ -1181,6 +1216,10 @@ final class BarView: NSView {
         // keep the strip in sync with the player (song changes, Library edits); never mid-drag
         queueSync = StreamPlayer.shared.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { self?.syncQueueStrip(); self?.updateExtras() }
+        }
+        // Spotify's queue changes (after an edit, or from the Library): follow it, never mid-drag
+        spotifySync = SpotifyQueue.shared.$items.dropFirst().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.syncSpotifyStrip() }
         }
         lyricArea.label = lyric
         lyricArea.onSwipe = { [weak self] dir in
@@ -1538,6 +1577,16 @@ final class BarView: NSView {
     @objc func pickerBack() { bumpPickerTimer(); backAction?() }
 
     var queueSync: AnyCancellable?
+    var spotifySync: AnyCancellable?
+    func syncSpotifyStrip() {
+        guard stripIsSpotify, pickerMode, showingUpNext else { return }
+        if queueStrip.isHolding { return }                    // picked back up after the drop (onLift → showUpNext)
+        let items = SpotifyQueue.shared.items
+        if items.isEmpty { showUpNext(); return }
+        if items.map(\.id) != queueStrip.entries.compactMap(\.uid) {
+            queueStrip.entries = items.map { .init(title: $0.title, sub: $0.artist, uid: $0.id) }
+        }
+    }
     var queueDirty = false
     func updateExtras() {
         let sp = StreamPlayer.shared
@@ -1597,6 +1646,7 @@ final class BarView: NSView {
     }
 
     func showProviders() {
+        pickerPage += 1
         showingUpNext = false
         extras.isHidden = true
         setPickerTransport(!currentTitle.isEmpty)
@@ -1618,16 +1668,19 @@ final class BarView: NSView {
         picker.items = items
     }
 
+    /// Bumped whenever the picker shows a different page, so a slow load can't overwrite a newer page.
+    var pickerPage = 0
     func showPlaylists(_ provider: String) {
+        pickerPage += 1; let page = pickerPage
         showingUpNext = false
         extras.isHidden = true
         setPickerTransport(false)
         setBack { [weak self] in self?.showProviders() }
         useQueueStrip(false)
         picker.items = [.init(title: "Loading…", dim: true, action: nil)]
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
             let result = await loadPlaylists(provider)
-            guard self.pickerMode else { return }
+            guard let self, self.pickerMode, self.pickerPage == page else { return }
             switch result {
             case .failure(let e):
                 self.picker.items = [.init(title: e.localizedDescription, dim: true, action: nil)]
@@ -1653,6 +1706,7 @@ final class BarView: NSView {
 
     /// Upcoming songs for whichever player is active.
     func showUpNext() {
+        pickerPage += 1; let page = pickerPage
         showingUpNext = true
         defer { updateExtras() }
         if !pickerMode {
@@ -1690,7 +1744,7 @@ final class BarView: NSView {
             // same strip as our own queue: tap to play, hold + drag to reorder, drop on 🗑 to remove
             let q = SpotifyQueue.shared
             q.refresh { [weak self] in
-                guard let self, self.pickerMode, self.showingUpNext, !self.queueStrip.isHolding else { return }
+                guard let self, self.pickerMode, self.showingUpNext, self.pickerPage == page, !self.queueStrip.isHolding else { return }
                 if let e = q.error { fill(nil, e) }
                 else if q.items.isEmpty { fill([], "") }
                 else {
@@ -1731,7 +1785,7 @@ final class BarView: NSView {
 
     func playPlaylist(_ provider: String, _ id: String, _ name: String) {
         closePicker()
-        setLyric("Loading \(name)…")
+        toast("Loading \(name)…", seconds: 3)
         if provider == "spotify" {
             StreamPlayer.shared.stop()
             if cfg.pauseOthers && bundleId != "com.spotify.client" { run(mediaControl, ["pause"]) }
@@ -1750,10 +1804,10 @@ final class BarView: NSView {
         Task { @MainActor in
             do {
                 let songs = id == likedSongsId ? try await Subsonic.starred() : try await Subsonic.playlist(id).1
-                guard !songs.isEmpty else { self.setLyric("\(name) is empty"); return }
+                guard !songs.isEmpty else { self.toast("\(name) is empty", seconds: 2.5); return }
                 playSongs(songs, shuffle: shuffleNow)
             } catch {
-                self.setLyric("Couldn't load \(name): \(error.localizedDescription)")
+                self.toast("Couldn't load \(name): \(error.localizedDescription)", seconds: 4)
             }
         }
     }
@@ -2014,6 +2068,10 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         // This must happen before ANY network request.
         URLCache.shared = URLCache(memoryCapacity: 48 << 20, diskCapacity: 0)
         URLCache.shared.removeAllCachedResponses()
+        signal(SIGPIPE, SIG_IGN)          // a helper that exits before reading stdin must not kill the app
+        NotificationCenter.default.addObserver(forName: .lyricsBarToast, object: nil, queue: .main) { [weak self] n in
+            if let t = n.object as? String { self?.view.toast(t, seconds: 3) }
+        }
         if let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "com.crispy.lyricsbar") {
             try? FileManager.default.removeItem(at: dir)
@@ -2097,7 +2155,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                        ConfigStore.shared.c.discordWhenPaused = "show"
                                    }
                                }
-                               if c.hasPrefix("spq") {                    // Spotify queue: spq [skip N | remove N | move A B]
+                               if c.hasPrefix("spq") {                    // Spotify queue: spq [skip N (= play entry N) | remove N | move A B]
                                    let q = SpotifyQueue.shared
                                    let w = c.split(separator: " ").map(String.init)
                                    let dump: (String?) -> Void = { err in
@@ -2485,7 +2543,22 @@ final class BarAwake {
         return v.doubleValue / 1e9
     }
 
+    private var screensAsleep = false
+    private var observing = false
+    private func observeScreens() {
+        guard !observing else { return }
+        observing = true
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in self?.screensAsleep = true }
+        nc.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in self?.screensAsleep = false }
+    }
+    private func screenLocked() -> Bool {
+        guard let d = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        return (d["CGSSessionScreenIsLocked"] as? Bool) ?? false
+    }
+
     func tick(playing: Bool) {
+        observeScreens()
         let now = Date()
         guard now.timeIntervalSince(lastCheck) >= 5 else { return }
         lastCheck = now
@@ -2494,7 +2567,8 @@ final class BarAwake {
             if idle < sinceOurs - 1.5 { lastReal = now.addingTimeInterval(-idle) }   // a real key/trackpad event
         }
         let mins = cfg.barSleepMinutes                 // 0 = like macOS, -1 = never, else minutes after last use
-        let want = mins != 0 && (playing || !cfg.barAwakeOnlyWhilePlaying)
+        // declaring activity turns the display on, so never while it's asleep or locked
+        let want = mins != 0 && !screensAsleep && !screenLocked() && (playing || !cfg.barAwakeOnlyWhilePlaying)
             && (mins < 0 || now.timeIntervalSince(lastReal) < mins * 60)
         if want {
             if lastDeclare == nil || now.timeIntervalSince(lastDeclare!) >= 20 {

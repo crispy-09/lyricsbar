@@ -23,6 +23,7 @@ final class DiscordPresence: ObservableObject {
     private var wasOn = false
     private var art: [String: String] = [:]        // "artist|album" → artwork URL ("" = none found)
     private var artLoading = Set<String>()
+    private var artFailedAt: [String: Date] = [:]  // network errors: try again after a minute
     /// Shown in Settings.
     @Published private(set) var status = "Off"
     var socketOverride: [String]?                  // tests
@@ -120,17 +121,21 @@ final class DiscordPresence: ObservableObject {
     private func lookUpArt(_ s: Snapshot) {
         let key = artKey(s)
         guard art[key] == nil, !artLoading.contains(key), !s.artist.isEmpty else { return }
+        if let t = artFailedAt[key], Date().timeIntervalSince(t) < 60 { return }
         artLoading.insert(key)
         var u = URLComponents(string: "https://itunes.apple.com/search")!
         u.queryItems = [.init(name: "term", value: s.artist + " " + (s.album.isEmpty ? s.title : s.album)),
                         .init(name: "entity", value: s.album.isEmpty ? "song" : "album"),
                         .init(name: "limit", value: "1")]
-        URLSession.shared.dataTask(with: u.url!) { [weak self] d, _, _ in
+        URLSession.shared.dataTask(with: u.url!) { [weak self] d, resp, _ in
             let j = d.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            let ok = (resp as? HTTPURLResponse)?.statusCode == 200 && j?["results"] != nil
             let first = (j?["results"] as? [[String: Any]])?.first
             let url = (first?["artworkUrl100"] as? String)?.replacingOccurrences(of: "100x100bb", with: "512x512bb") ?? ""
             DispatchQueue.main.async {
                 self?.artLoading.remove(key)
+                // a network error is retried on a later tick; "" only means Apple really has no cover
+                guard ok else { self?.artFailedAt[key] = Date(); return }
                 // only keep https URLs from Apple's image CDN
                 self?.art[key] = (url.hasPrefix("https://") && url.contains(".mzstatic.com/")) ? url : ""
             }
@@ -166,7 +171,9 @@ final class DiscordPresence: ObservableObject {
 
     private func send(_ act: [String: Any]?, key: String, appId: String, summary: String) {
         let now = Date()
-        if key == lastKey && ipc.isConnected { return }
+        // unchanged: nothing to send, except a refresh every minute (a dead socket is only noticed on write,
+        // so this is how presence comes back after Discord restarts)
+        if key == lastKey && ipc.isConnected && now.timeIntervalSince(lastSent) < 60 { return }
         if now.timeIntervalSince(lastSent) < 4 { return }          // Discord allows ~5 updates / 20 s; next tick retries
         if !ipc.isConnected || ipc.clientId != appId {
             guard now >= retryAt else { return }

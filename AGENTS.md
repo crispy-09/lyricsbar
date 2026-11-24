@@ -24,7 +24,10 @@ Notes for coding agents (and humans) working on LyricsBar.
   - It builds the activity from the same sources the bar uses (`state.json`, or `StreamPlayer` when that's in charge).
   - It's driven from `App.tick()`, evaluates once per second and sends at most once every 4 s (Discord's rate limit).
   - Never put Subsonic cover URLs in presence: they carry the token.
-- `Sources/SpotifyQueue.swift`: Spotify's Up Next, editable in both UIs. Edits go through `library.py spotify-skip` and `spotify-replace`, which replays the current song plus the edited list.
+- `Sources/SpotifyQueue.swift`: Spotify's Up Next, editable in both UIs. Edits go through `library.py spotify-jump` and `spotify-replace`, which replays the current song plus the edited list.
+  - IDs stay stable across refreshes, keyed by uri plus occurrence.
+  - Edits run one at a time; later edits are merged into the next replay.
+  - Replays are refused while Spotify is paused, because replaying would start the audio.
 - `BarAwake` (bottom of `main.swift`) keeps the Touch Bar lit with `IOPMAssertionDeclareUserActivity`. It tells real input apart by `HIDIdleTime` dropping below the time since its own declaration.
 - `Sources/Visualizer.swift`: `AudioTap` (FFT into band levels) and `VisualizerView`. The audio source is:
   - LyricsBar's own player: `MTAudioProcessingTap` on each `AVPlayerItem`
@@ -83,7 +86,7 @@ Screenshots:
 - **Never loop `pkill -HUP`** while the app may be (re)starting. A SIGHUP that arrives before the handler is installed kills it (exit 129), and launchd crash-loops.
 - **Don't drive playback through `transport()` in tests.** It controls whichever app is Now Playing, which could be the user's Spotify or Music. Call `StreamPlayer` directly with `testMuted = true` (as `mutedtest` does).
 - **Don't start audible playback** or send real scrobbles without asking the user.
-- **Don't test Spotify queue edits (`spotify-skip` / `spotify-replace`) on the user's account.** They change real playback.
+- **Don't test Spotify queue edits (`spotify-jump` / `spotify-replace`) on the user's account.** They change real playback.
 - **No top-level `let`/`var` after the run loop starts in `main.swift`.** Code below `app.run()` never runs, so such a global stays uninitialised and crashes when read. Put constants in a type's `static let`.
 
 ## Touch Bar quirks

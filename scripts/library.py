@@ -5,7 +5,7 @@
   library.py playlists <provider>       -> [{"id","name","count"}]   (subsonic | spotify | applemusic)
   library.py tracks subsonic <id>       -> [{"id","title","artist","album","duration","stream","cover"}]
   library.py queue spotify              -> [{"title","artist","album","uri","duration","image"}]
-  library.py spotify-skip <n>           -> skip forward n songs
+  library.py spotify-jump <uri> <index> -> skip forward to that queued song
   library.py spotify-replace <uri>...   -> replay current song + this list (remove / reorder)
   library.py spotify-login <client_id>  -> one-time Spotify sign-in (opens the browser)
 """
@@ -90,8 +90,13 @@ def spotify_token():
         return c["access_token"]
     body = urllib.parse.urlencode(dict(grant_type="refresh_token", refresh_token=c["refresh_token"],
                                        client_id=c["client_id"])).encode()
-    t = http_json("https://accounts.spotify.com/api/token", data=body,
-                  headers={"Content-Type": "application/x-www-form-urlencoded"})
+    try:
+        t = http_json("https://accounts.spotify.com/api/token", data=body,
+                      headers={"Content-Type": "application/x-www-form-urlencoded"})
+    except urllib.error.HTTPError as e:
+        if e.code in (400, 401):                           # invalid_grant: the login was revoked or expired
+            raise RuntimeError("Spotify's login expired: reconnect it in Settings → Providers")
+        raise
     c["access_token"] = t["access_token"]
     c["expires"] = time.time() + t.get("expires_in", 3600)
     if t.get("refresh_token"):
@@ -116,9 +121,10 @@ def spotify_playlists():
 
 
 SPOTIFY_URI = re.compile(r"^spotify:(track|episode):[A-Za-z0-9]{22}$")
+LISTED_URI = re.compile(r"^spotify:[!-~]{1,390}$")        # anything Spotify lists (local files too), printable ASCII
 
 
-def spotify_api(method, path, body=None):
+def spotify_api(method, path, body=None, _retried=False):
     """Call the Spotify Web API; returns parsed JSON or None (204). Raises RuntimeError with a readable reason."""
     tok = spotify_token()
     data = json.dumps(body).encode() if body is not None else (b"" if method in ("POST", "PUT") else None)
@@ -132,6 +138,13 @@ def spotify_api(method, path, body=None):
             except ValueError:                             # some player endpoints answer 200 with a non-JSON body
                 return None
     except urllib.error.HTTPError as e:
+        if e.code == 429 and not _retried:                 # rate limited: wait as asked (briefly) and try once more
+            try:
+                wait = min(float(e.headers.get("Retry-After") or 1), 5)
+            except ValueError:
+                wait = 1
+            time.sleep(wait)
+            return spotify_api(method, path, body, _retried=True)
         try:
             msg = json.loads(e.read()).get("error", {}).get("message", "")
         except Exception:
@@ -160,9 +173,19 @@ def spotify_queue():
     return [_track(t) for t in r.get("queue", []) if t]
 
 
-def spotify_skip(n):
-    """Jump forward n songs in the queue (tap on an Up Next entry)."""
-    n = max(1, min(int(n), 50))
+def spotify_jump(uri, hint):
+    """Play a queued song now. Finds it in the queue as it is *now* (a song may have ended since the list
+    was shown) and skips exactly that far; `hint` picks the right copy when the same song is queued twice."""
+    if not LISTED_URI.match(uri):
+        raise RuntimeError("invalid song")
+    hint = int(hint)
+    q = [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t]
+    found = [i for i, u in enumerate(q) if u == uri]
+    if not found:
+        raise RuntimeError("That song isn't in Spotify's queue any more")
+    n = min(found, key=lambda i: abs(i - hint)) + 1
+    if n > 50:
+        raise RuntimeError("That song is too far down the queue to skip to")
     for _ in range(n):
         spotify_api("POST", "/me/player/next")
         time.sleep(0.12)                                   # keep the skips in order
@@ -176,6 +199,8 @@ def spotify_replace(uris):
     st = spotify_api("GET", "/me/player")
     if not st or not st.get("item") or not st.get("device"):
         raise RuntimeError("Spotify isn't playing on any device right now")
+    if not st.get("is_playing"):                           # replaying would start the audio
+        raise RuntimeError("Resume Spotify to edit Up Next")
     dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
     if st.get("shuffle_state"):                            # a shuffled list would scramble the new order
         spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
@@ -185,10 +210,8 @@ def spotify_replace(uris):
                 {"uris": [st["item"]["uri"]] + uris, "position_ms": pos})
     # the desktop app ignores position_ms and restarts the song, so seek back to where it was
     time.sleep(0.6)
-    now = pos + (int((time.time() - t0) * 1000) if st.get("is_playing") else 0)
+    now = pos + int((time.time() - t0) * 1000)
     spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
-    if not st.get("is_playing"):
-        spotify_api("PUT", f"/me/player/pause?device_id={dev}")
     return {"count": len(uris)}
 
 
@@ -292,8 +315,8 @@ def main(argv):
             res = applemusic_playlists()
         elif cmd == "queue" and argv[2] == "spotify":
             res = spotify_queue()
-        elif cmd == "spotify-skip":
-            res = spotify_skip(argv[2])
+        elif cmd == "spotify-jump":
+            res = spotify_jump(argv[2], argv[3])
         elif cmd == "spotify-replace":
             res = spotify_replace(argv[2:])
         elif cmd == "tracks" and argv[2] == "subsonic":

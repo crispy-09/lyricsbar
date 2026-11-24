@@ -1,6 +1,7 @@
 // Settings window (SwiftUI): behaviour, appearance, pinned playlists, Subsonic playlist manager, accounts.
 import SwiftUI
 import AppKit
+import Combine
 
 // MARK: - Window
 
@@ -309,12 +310,22 @@ func loadPlaylists(_ provider: String) async -> Result<[PlaylistRow], Error> {
     @Published var error: String?
     @Published var busy = false
 
-    func run(_ work: @escaping () async throws -> Void) {
-        Task {
-            busy = true; error = nil
-            do { try await work() } catch { self.error = error.localizedDescription }
-            busy = false
+    /// Operations run one after another (a quick second remove must see the first one's result).
+    private var tail: Task<Void, Never>?
+    private var running = 0
+    @discardableResult
+    func run(_ work: @escaping () async throws -> Void) -> Task<Bool, Never> {
+        let prev = tail
+        running += 1; busy = true; error = nil
+        let t = Task { () -> Bool in
+            await prev?.value
+            var ok = true
+            do { try await work() } catch { self.error = error.localizedDescription; ok = false }
+            running -= 1; busy = running > 0
+            return ok
         }
+        tail = Task { _ = await t.value }
+        return t
     }
 
     func reloadPlaylists() {
@@ -336,15 +347,20 @@ func loadPlaylists(_ provider: String) async -> Result<[PlaylistRow], Error> {
               ConfigStore.shared.c.pinned = ConfigStore.shared.c.pinned.map {
                   $0.provider == "subsonic" && $0.playlistId == id ? PinnedPlaylist(provider: "subsonic", playlistId: id, name: name) : $0 } }
     }
-    func delete(_ id: String) {
-        run { try await Subsonic.delete(id); self.selected = nil; self.songs = []
-              ConfigStore.shared.c.pinned.removeAll { $0.provider == "subsonic" && $0.playlistId == id }
-              self.playlists = try await Subsonic.playlists() }
+    /// `done(true)` only once the server has actually deleted it.
+    func delete(_ id: String, done: ((Bool) -> Void)? = nil) {
+        let t = run { try await Subsonic.delete(id); if self.selected == id { self.selected = nil; self.songs = [] }
+                      ConfigStore.shared.c.pinned.removeAll { $0.provider == "subsonic" && $0.playlistId == id }
+                      self.playlists = try await Subsonic.playlists() }
+        Task { let ok = await t.value; done?(ok) }
     }
+    /// Removes by song identity: the list updates at once and the server gets the whole new order.
     func remove(_ offsets: IndexSet) {
         guard let id = selected else { return }
-        run { try await Subsonic.remove(id, indexes: Array(offsets)); self.songs = try await Subsonic.playlist(id).1
-              self.playlists = try await Subsonic.playlists() }
+        let gone = Set(offsets.compactMap { songs.indices.contains($0) ? songs[$0].uid : nil })
+        songs.removeAll { gone.contains($0.uid) }
+        let ids = songs.map(\.id)
+        run { try await Subsonic.setSongs(id, ids); self.playlists = try await Subsonic.playlists() }
     }
     func move(_ from: IndexSet, _ to: Int) {
         guard let id = selected else { return }
@@ -372,6 +388,7 @@ struct PlaylistEditor: View {
     @StateObject var m = SubsonicManager()
     @ObservedObject var store = ConfigStore.shared
     let playlistId: String
+    var onDeleted: (() -> Void)? = nil
     var onClose: () -> Void
     @State var query = ""
     @State var nameDraft = ""
@@ -449,7 +466,7 @@ struct PlaylistEditor: View {
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Delete “\(current?.name ?? "")” from your server?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) { m.delete(playlistId); onClose() }
+            Button("Delete", role: .destructive) { m.delete(playlistId) { ok in if ok { onDeleted?(); onClose() } } }
         }
     }
 }
@@ -528,12 +545,23 @@ struct AccountsSections: View {
             try? input.fileHandleForWriting.close()          // nothing to send; new tokens come back on stdout
             let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             p.waitUntilExit()
+            // the output can contain tokens: parse it, never show it
             let last = out.split(separator: "\n").last.map(String.init) ?? ""
             let j = (try? JSONSerialization.jsonObject(with: Data(last.utf8))) as? [String: Any]
-            if p.terminationStatus == 0, let j { Creds.absorb(fromHelper: j) }
+            var status = "Connected"
+            if p.terminationStatus != 0 || j == nil {
+                // a plain error line (sys.exit / traceback) carries no tokens; JSON output might, so only its fields
+                let plain = j == nil && !last.contains("token") ? String(last.prefix(200)) : nil
+                let msg = (j?["error"] as? String) ?? plain ?? "the sign-in didn't finish"
+                status = "Failed: " + msg
+            } else if let j, j["__creds"] != nil, !Creds.absorb(fromHelper: j) {
+                status = "Failed: couldn't save the login to the Keychain (allow LyricsBar access and try again)"
+            } else if Creds.get("spotify") == nil {
+                status = "Failed: the sign-in didn't return a login"
+            }
             DispatchQueue.main.async {
                 spBusy = false
-                spStatus = p.terminationStatus == 0 && Creds.get("spotify") != nil ? "Connected" : "Failed: " + last
+                spStatus = status
                 changed()
             }
         }

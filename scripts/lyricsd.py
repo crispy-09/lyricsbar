@@ -84,23 +84,26 @@ def lyrics_for(p):
         with open(path) as f:
             return [tuple(x) for x in json.load(f)]
     synced = None
+    dur = p.get("duration") or 0                 # some players report 0 at first
     try:
-        q = urllib.parse.urlencode(dict(artist_name=p["artist"], track_name=p["track"],
-                                        album_name=p["album"], duration=round(p["duration"])))
-        synced = fetch("https://lrclib.net/api/get?" + q).get("syncedLyrics")
+        params = dict(artist_name=p["artist"], track_name=p["track"], album_name=p["album"])
+        if dur > 0:
+            params["duration"] = round(dur)
+        synced = fetch("https://lrclib.net/api/get?" + urllib.parse.urlencode(params)).get("syncedLyrics")
     except Exception:
         pass
     if not synced:
         try:
             q = urllib.parse.urlencode(dict(artist_name=p["artist"], track_name=p["track"]))
             for r in fetch("https://lrclib.net/api/search?" + q):
-                if r.get("syncedLyrics") and abs((r.get("duration") or 0) - p["duration"]) < 5:
+                if r.get("syncedLyrics") and (dur <= 0 or abs((r.get("duration") or 0) - dur) < 5):
                     synced = r["syncedLyrics"]; break
         except Exception:
             return None  # network error: don't cache, retry next song change
     lines = parse_lrc(synced)
-    with open(path, "w") as f:
-        json.dump(lines, f)
+    if lines or dur > 0:                         # "no lyrics" found without knowing the length: don't remember it
+        with open(path, "w") as f:
+            json.dump(lines, f)
     return lines
 
 def write(text):
@@ -160,15 +163,19 @@ def _stream():
     """Follow the system Now Playing feed (works for Spotify, Music, browsers, any player...)."""
     last_key, last_art = None, None
     while True:
+        proc = None
         try:
             proc = subprocess.Popen([MEDIA_CONTROL, "stream", "--no-diff"],
                                     stdout=subprocess.PIPE, text=True)
             for line in proc.stdout:
                 try:
-                    p = json.loads(line).get("payload") or {}
-                except ValueError:
-                    continue
-                last_art = _publish(p, last_art)
+                    msg = json.loads(line)
+                    p = (msg.get("payload") if isinstance(msg, dict) else None) or {}
+                    if not isinstance(p, dict):
+                        continue
+                    last_art = _publish(p, last_art)
+                except (ValueError, TypeError, OSError):
+                    continue                     # one odd event (or a failed write) must not restart the stream
                 if not p.get("title"):
                     with _lock: _np["state"] = None
                     last_key = None
@@ -182,14 +189,24 @@ def _stream():
                 ts = _parse_ts(p.get("timestamp", ""))
                 # timestamp only has 1s resolution: trust arrival time for fresh events
                 anchor = now if ts is None or now - ts < 1.5 else ts + 0.5
+                try:
+                    st = dict(track=p["title"], artist=p.get("artist", ""),
+                              album=p.get("album", ""), duration=float(p.get("duration") or 0),
+                              position=float(p.get("elapsedTime") or 0),
+                              rate=0.0 if paused else float(p.get("playbackRate") or 1))
+                except (TypeError, ValueError):
+                    continue
                 with _lock:
-                    _np["state"] = dict(track=p["title"], artist=p.get("artist", ""),
-                                        album=p.get("album", ""), duration=float(p.get("duration") or 0),
-                                        position=float(p.get("elapsedTime") or 0),
-                                        rate=0.0 if paused else float(p.get("playbackRate") or 1))
+                    _np["state"] = st
                     _np["anchor"] = anchor
         except Exception:
             pass
+        finally:
+            if proc is not None:                 # never leave an old media-control running
+                try:
+                    proc.kill(); proc.wait(timeout=5)
+                except Exception:
+                    pass
         time.sleep(2)
 
 def now_playing():

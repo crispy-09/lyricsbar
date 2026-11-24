@@ -628,6 +628,8 @@ struct PlaylistDetail: View {
     let playlist: SPlaylist
     @State private var songs: [SSong] = []
     @State private var editing = false
+    @State private var deleted = false
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var store = ConfigStore.shared
     var body: some View {
         ScrollView {
@@ -657,8 +659,10 @@ struct PlaylistDetail: View {
         }
         .navigationTitle(playlist.name)
         .task { songs = (try? await Subsonic.playlist(playlist.id).1) ?? [] }
-        .sheet(isPresented: $editing, onDismiss: { Task { songs = (try? await Subsonic.playlist(playlist.id).1) ?? [] } }) {
-            PlaylistEditor(playlistId: playlist.id) { editing = false }
+        .sheet(isPresented: $editing, onDismiss: {
+            if deleted { dismiss() } else { Task { songs = (try? await Subsonic.playlist(playlist.id).1) ?? [] } }
+        }) {
+            PlaylistEditor(playlistId: playlist.id, onDeleted: { deleted = true }) { editing = false }
         }
     }
 }
@@ -940,6 +944,7 @@ final class LyricsModel: ObservableObject {
     @Published var title = ""
     @Published var artist = ""
     private var key = ""
+    private var nextRetry = Date.distantPast
     private var state: (elapsed: Double, anchor: Double, rate: Double) = (0, 0, 0)
     private var timer: Timer?
     init() {
@@ -960,8 +965,9 @@ final class LyricsModel: ObservableObject {
         if k != key {
             key = k; title = t; artist = a; current = -1
             lines = load(k)
-        } else if lines.isEmpty && !t.isEmpty {
-            lines = load(k)          // the daemon may still be fetching them
+        } else if lines.isEmpty && !t.isEmpty, Date() >= nextRetry {
+            nextRetry = Date().addingTimeInterval(1)   // the daemon may still be fetching them; once a second is plenty
+            lines = load(k)
         }
         let p = position
         let i = lines.lastIndex { $0.t <= p } ?? -1

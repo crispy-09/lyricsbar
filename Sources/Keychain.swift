@@ -93,8 +93,12 @@ enum Creds {
     }
 
     /// The helper reports refreshed tokens back as {"__creds": {...}}.
-    static func absorb(fromHelper j: [String: Any]) {
-        guard let c = j["__creds"] as? [String: [String: Any]] else { return }
-        for (k, v) in c { set(k, v.mapValues { ($0 as? String) ?? ($0 as? NSNumber)?.stringValue ?? "\($0)" }) }
+    /// Saves tokens the helper refreshed. Returns false if any of them couldn't be written to the Keychain.
+    @discardableResult
+    static func absorb(fromHelper j: [String: Any]) -> Bool {
+        guard let c = j["__creds"] as? [String: [String: Any]] else { return true }
+        var ok = true
+        for (k, v) in c { ok = set(k, v.mapValues { ($0 as? String) ?? ($0 as? NSNumber)?.stringValue ?? "\($0)" }) && ok }
+        return ok
     }
 }

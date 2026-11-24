@@ -93,7 +93,8 @@ actor ScrobbleQueue {
                     try await send(svc, batch)
                 } catch let e as ScrobbleError where e.permanent {
                     NSLog("LyricsBar: scrobble rejected by \(svc): \(e.message)")
-                } catch let e as SubsonicError where e.code != nil {
+                } catch let e as SubsonicError where e.code != nil && e.code != 40 && e.code != 41 {
+                    // 40/41 = login problems (e.g. a changed password): keep those plays and retry later
                     NSLog("LyricsBar: scrobble rejected by Subsonic: \(e.message)")
                 } catch {
                     break                       // offline or temporary: try again later

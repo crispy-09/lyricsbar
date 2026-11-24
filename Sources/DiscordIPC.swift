@@ -14,7 +14,7 @@ final class DiscordIPC {
         for k in ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"] {
             if let v = ProcessInfo.processInfo.environment[k], !v.isEmpty { dirs.append(v) }
         }
-        dirs += [NSTemporaryDirectory(), "/tmp"]
+        dirs.append(NSTemporaryDirectory())        // not /tmp: anyone could create a socket there
         var seen = Set<String>(), out: [String] = []
         for d in dirs {
             let dir = d.hasSuffix("/") ? String(d.dropLast()) : d
@@ -27,7 +27,7 @@ final class DiscordIPC {
     /// Connects and does the handshake. `paths` overrides the search (tests).
     func connect(clientId id: String, paths: [String]? = nil) -> Bool {
         close()
-        for p in paths ?? Self.socketPaths() where FileManager.default.fileExists(atPath: p) {
+        for p in paths ?? Self.socketPaths() where Self.isOwnSocket(p) {
             let s = socket(AF_UNIX, SOCK_STREAM, 0)
             guard s >= 0 else { continue }
             var one: Int32 = 1
@@ -57,6 +57,13 @@ final class DiscordIPC {
             close()
         }
         return false
+    }
+
+    /// Only connect to a real socket owned by this user (another account can't plant one to read our activity).
+    static func isOwnSocket(_ path: String) -> Bool {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return false }
+        return (st.st_mode & S_IFMT) == S_IFSOCK && st.st_uid == getuid()
     }
 
     func close() {

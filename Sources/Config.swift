@@ -107,6 +107,14 @@ final class ConfigStore: ObservableObject {
         if let d = FileManager.default.contents(atPath: path),
            let file = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
             for (k, v) in file where defaults[k] != nil { merged[k] = v }
+            if decode(merged) == nil {
+                // one value of the wrong type would reset everything: keep each value that decodes on its own
+                merged = defaults
+                for (k, v) in file where defaults[k] != nil {
+                    var trial = merged; trial[k] = v
+                    if decode(trial) != nil { merged = trial } else { NSLog("LyricsBar: ignoring bad setting \(k)") }
+                }
+            }
             // older configs only had the tap choice (hold did the other one): keep that behaviour
             if file["lyricHoldAction"] == nil, (file["lyricTapAction"] as? String) == "controls" { merged["lyricHoldAction"] = "pause" }
             // 2 s was the old default, never a choice: move it to the new 10 s default
@@ -114,9 +122,12 @@ final class ConfigStore: ObservableObject {
             // quote rotation is now whole minutes, at least one
             if let q = file["pausedQuoteSeconds"] as? Double { merged["pausedQuoteSeconds"] = max(60, (q / 60).rounded() * 60) }
         }
-        guard let data = try? JSONSerialization.data(withJSONObject: merged),
-              let cfg = try? JSONDecoder().decode(Config.self, from: data) else { return Config() }
-        return cfg
+        return decode(merged) ?? Config()
+    }
+
+    private static func decode(_ d: [String: Any]) -> Config? {
+        guard let data = try? JSONSerialization.data(withJSONObject: d) else { return nil }
+        return try? JSONDecoder().decode(Config.self, from: data)
     }
 
     func save() {

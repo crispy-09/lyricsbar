@@ -82,7 +82,9 @@ enum Subsonic {
     }
 
     static func saveAuth(_ a: SubsonicAuth) throws {
-        Creds.set("subsonic", ["server": a.server, "u": a.u, "t": a.t, "s": a.s])
+        guard Creds.set("subsonic", ["server": a.server, "u": a.u, "t": a.t, "s": a.s]) else {
+            throw SubsonicError(message: "Signed in, but couldn't save the login to the Keychain")
+        }
     }
 
     static func url(_ endpoint: String, _ params: [(String, String)] = [], json: Bool = true, auth a: SubsonicAuth? = nil) -> URL? {
@@ -103,10 +105,19 @@ enum Subsonic {
     }
 
     @discardableResult
-    static func call(_ endpoint: String, _ params: [(String, String)] = [], auth a: SubsonicAuth? = nil) async throws -> [String: Any] {
-        guard let u = url(endpoint, params, auth: a) else { throw SubsonicError(message: "Subsonic isn't set up") }
+    /// `post`: send `params` as a form body (long lists, e.g. every song of a big playlist, can exceed URL limits).
+    static func call(_ endpoint: String, _ params: [(String, String)] = [], auth a: SubsonicAuth? = nil,
+                     post: Bool = false) async throws -> [String: Any] {
+        guard let u = url(endpoint, post ? [] : params, auth: a) else { throw SubsonicError(message: "Subsonic isn't set up") }
         var req = URLRequest(url: u, timeoutInterval: 20)
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        if post {
+            let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+            req.httpMethod = "POST"
+            req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+            req.httpBody = params.map { "\($0.0.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")=\($0.1.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")" }
+                .joined(separator: "&").data(using: .utf8)
+        }
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let h = resp as? HTTPURLResponse, h.statusCode != 200 {
             throw SubsonicError(message: "Server answered HTTP \(h.statusCode)")
@@ -215,7 +226,7 @@ enum Subsonic {
     }
     /// Replaces the playlist's songs (used for reordering).
     static func setSongs(_ id: String, _ songs: [String]) async throws {
-        try await call("createPlaylist", [("playlistId", id)] + songs.map { ("songId", $0) })
+        try await call("createPlaylist", [("playlistId", id)] + songs.map { ("songId", $0) }, post: true)
     }
 
     /// Sign in with a password; only the salted token is stored.
