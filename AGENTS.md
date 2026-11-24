@@ -69,6 +69,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `toast <text>`, `text <s>`, `qpreview` | UI checks |
 | `discordtest <socket>` / `discordtest off` | Turn presence on against a fake Discord socket (test app ID), then back off. This changes the config, so always run `off` afterwards |
 | `discordpreview` | Write the activity that would be sent, plus the status |
+| `spq`, `spq skip N`, `spq remove N`, `spq move A B` | Read or edit Spotify's Up Next through `SpotifyQueue`, then write the queue to `debug.out`. **Edits change real playback.** Spotify must be playing, because its API returns an empty queue for an idle device |
 | `mutedtest` | Muted playback self-test (play, next, seek, crossfade, previous, pause, restore). No sound, no scrobbles; the log goes to `debug.out` |
 
 Other signals: `SIGUSR1` toggles the media controls and `SIGUSR2` opens the volume slider.

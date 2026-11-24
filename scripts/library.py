@@ -127,7 +127,10 @@ def spotify_api(method, path, body=None):
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             raw = r.read()
-            return json.loads(raw) if raw else None
+            try:
+                return json.loads(raw) if raw.strip() else None
+            except ValueError:                             # some player endpoints answer 200 with a non-JSON body
+                return None
     except urllib.error.HTTPError as e:
         try:
             msg = json.loads(e.read()).get("error", {}).get("message", "")
@@ -176,9 +179,14 @@ def spotify_replace(uris):
     dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
     if st.get("shuffle_state"):                            # a shuffled list would scramble the new order
         spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
-    pos = (st.get("progress_ms") or 0) + (400 if st.get("is_playing") else 0)
+    t0 = time.time()
+    pos = st.get("progress_ms") or 0
     spotify_api("PUT", f"/me/player/play?device_id={dev}",
                 {"uris": [st["item"]["uri"]] + uris, "position_ms": pos})
+    # the desktop app ignores position_ms and restarts the song, so seek back to where it was
+    time.sleep(0.6)
+    now = pos + (int((time.time() - t0) * 1000) if st.get("is_playing") else 0)
+    spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
     if not st.get("is_playing"):
         spotify_api("PUT", f"/me/player/pause?device_id={dev}")
     return {"count": len(uris)}

@@ -84,7 +84,7 @@ Everything else is in **Settings** (Library window sidebar, or ⌘,):
 
 - **Subsonic / Navidrome**: sign in with your server URL, username and password. Only a salted token is stored, never the password.
 - **Spotify**: create an app at developer.spotify.com with the redirect URI `http://127.0.0.1:8898/callback`, then paste its Client ID under Providers → Spotify. Playback happens in the Spotify app.
-  - Up Next is editable on the Touch Bar and in the Library (needs Premium). Spotify's API can't remove or reorder queue items, so an edit replays the current song from the same position, followed by your edited list. Shuffle is turned off, and Spotify stops after those songs.
+  - Up Next is editable on the Touch Bar and in the Library (needs Premium). Spotify's API can't remove or reorder queue items, so an edit replays the current song from the same position, followed by your edited list. Shuffle is turned off, and afterwards Spotify doesn't continue with the rest of the original playlist; its autoplay may continue with similar songs.
   - If you connected Spotify before this feature existed, reconnect it once to grant playback control.
 - **Apple Music**: uses the Music app through AppleScript.
 

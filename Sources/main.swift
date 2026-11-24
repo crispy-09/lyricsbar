@@ -2088,6 +2088,32 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                        ConfigStore.shared.c.discordWhenPaused = "show"
                                    }
                                }
+                               if c.hasPrefix("spq") {                    // Spotify queue: spq [skip N | remove N | move A B]
+                                   let q = SpotifyQueue.shared
+                                   let w = c.split(separator: " ").map(String.init)
+                                   let dump: (String?) -> Void = { err in
+                                       q.refresh {
+                                           let lines = q.items.enumerated().map { "\($0.offset): \($0.element.title) — \($0.element.artist)" }
+                                           try? (["action error: \(err ?? "none")", "queue error: \(q.error ?? "none")"] + lines)
+                                               .joined(separator: "\n").write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                       }
+                                   }
+                                   let n = w.count > 1 ? Int(w[2 < w.count ? 2 : 1].trimmingCharacters(in: .whitespacesAndNewlines)) : nil
+                                   q.refresh {
+                                       let items = q.items
+                                       switch w.count > 1 ? w[1] : "" {
+                                       case "skip": if let n, items.indices.contains(n) { q.jump(id: items[n].id) { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } } }
+                                       case "remove": if let n, items.indices.contains(n) { q.remove(id: items[n].id) { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } } }
+                                       case "move":
+                                           let ab = w.dropFirst(2).compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                                           if ab.count == 2, items.indices.contains(ab[0]), items.indices.contains(ab[1]) {
+                                               var ids = items.map(\.id); ids.insert(ids.remove(at: ab[0]), at: ab[1])
+                                               q.reorder(ids) { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } }
+                                           }
+                                       default: dump(nil)
+                                       }
+                                   }
+                               }
                                if c.hasPrefix("discordpreview") {
                                    let a = DiscordPresence.shared.activity(for: DiscordPresence.shared.snapshot(), cfg)
                                    let d = a.flatMap { try? JSONSerialization.data(withJSONObject: $0, options: .sortedKeys) }
