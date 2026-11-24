@@ -104,7 +104,7 @@ Settings → **Discord**:
 3. Vesktop users: turn on Rich Presence (arRPC) in Vesktop's settings.
 
 You can customize:
-- the activity type ("Listening to" or "Playing")
+- the activity type ("Listening to" or "Playing") and the top line after it (default `{artist}`, so "Listening to Glass Animals"). Vesktop shows this; the official Discord app always shows your application's name there
 - the two text lines and the picture's hover text, using templates with `{title}` `{artist}` `{album}` `{lyric}` `{player}`
 - what the member list shows
 - the progress bar

@@ -59,6 +59,7 @@ struct Config: Codable, Equatable {
     var discordEnabled = false
     var discordAppId = ""             // your Discord application's ID (public, not a secret)
     var discordType = "listening"     // "listening" | "playing"
+    var discordName = "{artist}"      // top line: "Listening to <this>" (Vesktop/arRPC; the official app shows the app name)
     var discordLine1 = "{title}"
     var discordLine2 = "by {artist}"
     var discordHover = "{album}"      // tooltip on the picture

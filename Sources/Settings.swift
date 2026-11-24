@@ -794,13 +794,15 @@ struct DiscordPane: View {
                 Picker("Activity", selection: $store.c.discordType) {
                     Text("Listening to …").tag("listening"); Text("Playing …").tag("playing")
                 }
+                TextField(store.c.discordType == "playing" ? "Top line: Playing …" : "Top line: Listening to …",
+                          text: $store.c.discordName, prompt: Text("empty = your Discord app's name"))
                 TextField("First line", text: $store.c.discordLine1)
                 TextField("Second line", text: $store.c.discordLine2)
                 TextField("Picture hover text", text: $store.c.discordHover)
                 Picker("Member list shows", selection: $store.c.discordStatusDisplay) {
-                    Text("App name").tag("app"); Text("First line").tag("details"); Text("Second line").tag("state")
+                    Text("Top line").tag("app"); Text("First line").tag("details"); Text("Second line").tag("state")
                 }
-                Text("Use \(DiscordPresence.placeholders.joined(separator: " ")) anywhere. {lyric} is the current line (it changes every few seconds; Discord only updates about every 4 s). Empty fields are dropped, so \"by {artist}\" disappears when there's no artist.")
+                Text("The top line works in Vesktop; the official Discord app always shows your application's name there. Use \(DiscordPresence.placeholders.joined(separator: " ")) anywhere. {lyric} is the current line (it changes every few seconds; Discord only updates about every 4 s). Empty fields are dropped, so \"by {artist}\" disappears when there's no artist.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Details") {
@@ -822,7 +824,7 @@ struct DiscordPane: View {
             Section("Preview") {
                 if let a = presence.activity(for: snap, store.c) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text((store.c.discordType == "playing" ? "Playing " : "Listening to ") + "<your Discord app's name>")
+                        Text((store.c.discordType == "playing" ? "Playing " : "Listening to ") + ((a["name"] as? String) ?? "<your Discord app's name>"))
                             .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                         if let d = a["details"] as? String { Text(d).font(.body.weight(.semibold)) }
                         if let s = a["state"] as? String { Text(s).foregroundStyle(.secondary) }

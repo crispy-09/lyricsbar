@@ -92,6 +92,8 @@ final class DiscordPresence: ObservableObject {
         }
         if !s.playing && c.discordWhenPaused == "hide" { return nil }
         var a: [String: Any] = ["type": c.discordType == "playing" ? 0 : 2]
+        // "Listening to <name>": Vesktop/arRPC uses this name if given, else your Discord application's name
+        if let n = Self.field(Self.fill(c.discordName, s)) { a["name"] = n }
         if let d = Self.field(Self.fill(c.discordLine1, s)) { a["details"] = d }
         var line2 = Self.fill(c.discordLine2, s)
         if !s.playing { line2 = line2.isEmpty ? "Paused" : "Paused · " + line2 }
