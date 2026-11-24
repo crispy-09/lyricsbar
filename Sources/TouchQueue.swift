@@ -12,6 +12,8 @@ final class QueueStrip: NSView {
     var onLift: ((Bool) -> Void)?              // picked up / dropped
     var onTrashHover: ((Bool) -> Void)?
     var onInteract: (() -> Void)?
+    /// Swipe right again at the start of the list to reveal a Clear pill; tapping it calls this.
+    var onClear: (() -> Void)?
     weak var trash: NSView?
     var isHolding: Bool { lifted != nil }
 
@@ -40,6 +42,14 @@ final class QueueStrip: NSView {
         didSet { if overTrash != oldValue { onTrashHover?(overTrash); styleLifted() } }
     }
     private var velocity: CGFloat = 0, lastSample: (x: CGFloat, t: TimeInterval) = (0, 0)
+    // pull-to-reveal Clear
+    private let clearW: CGFloat = 62
+    private var maxPull: CGFloat { clearW + spacing }
+    private var pull: CGFloat = 0
+    private var pullStart: CGFloat = 0
+    private var pulling = false
+    private var revealed: Bool { pull >= maxPull - 0.5 }
+    private let clearLayer = CALayer()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -48,6 +58,9 @@ final class QueueStrip: NSView {
         layer?.masksToBounds = true
         layer?.cornerRadius = 8          // clipped edges get the same rounding as the pills
         layer?.addSublayer(content)
+        clearLayer.anchorPoint = .zero
+        clearLayer.opacity = 0
+        layer?.addSublayer(clearLayer)
         setContentHuggingPriority(.defaultLow, for: .horizontal)
         setContentCompressionResistancePriority(.init(1), for: .horizontal)
     }
@@ -100,7 +113,38 @@ final class QueueStrip: NSView {
             return l
         }
         lifted = nil
+        clearLayer.contentsScale = scale
+        clearLayer.contents = renderClear()
+        clearLayer.bounds = CGRect(x: 0, y: 0, width: clearW, height: pillH)
+        setPull(0, animated: false)            // a new list starts with Clear tucked away
         place(animated: false)
+        CATransaction.commit()
+    }
+
+    private func renderClear() -> CGImage? {
+        let s = scale
+        let img = NSImage(size: NSSize(width: clearW, height: pillH), flipped: false) { r in
+            NSColor.systemRed.withAlphaComponent(0.6).setFill()
+            NSBezierPath(roundedRect: r, xRadius: 8, yRadius: 8).fill()
+            let para = NSMutableParagraphStyle(); para.alignment = .center
+            let t = NSAttributedString(string: "Clear", attributes: [.font: self.font, .foregroundColor: NSColor.white, .paragraphStyle: para])
+            let h = ceil(self.font.ascender - self.font.descender)
+            t.draw(with: NSRect(x: 0, y: (r.height - h) / 2, width: r.width, height: h), options: .usesLineFragmentOrigin)
+            return true
+        }
+        var rect = NSRect(x: 0, y: 0, width: clearW * s, height: pillH * s)
+        return img.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }
+
+    /// Slides the list right by `p` and the Clear pill in from the left edge.
+    private func setPull(_ p: CGFloat, animated: Bool) {
+        pull = max(0, min(maxPull, p))
+        CATransaction.begin()
+        CATransaction.setDisableActions(!animated)
+        CATransaction.setAnimationDuration(0.2)
+        clearLayer.position = CGPoint(x: pull - maxPull, y: (bounds.height - pillH) / 2)
+        clearLayer.opacity = Float(pull / maxPull)
+        content.frame = CGRect(x: -offset + pull, y: 0, width: max(contentW, bounds.width), height: bounds.height)
         CATransaction.commit()
     }
 
@@ -122,14 +166,14 @@ final class QueueStrip: NSView {
     private func setOffset(_ o: CGFloat) {
         offset = clamp(o)
         CATransaction.begin(); CATransaction.setDisableActions(true)
-        content.frame = CGRect(x: -offset, y: 0, width: max(contentW, bounds.width), height: bounds.height)
+        content.frame = CGRect(x: -offset + pull, y: 0, width: max(contentW, bounds.width), height: bounds.height)
         if let l = lifted { pills[l].position = CGPoint(x: fingerX - grabDX + offset - 3, y: (bounds.height - pillH) / 2 - 1) }
         CATransaction.commit()
     }
     override func layout() { super.layout(); place(animated: false) }
 
     private func index(at x: CGFloat) -> Int? {
-        let cx = x + offset
+        let cx = x - pull + offset
         return xs.indices.first { cx >= xs[$0] && cx <= xs[$0] + widths[$0] }
     }
 
@@ -149,6 +193,7 @@ final class QueueStrip: NSView {
         stopTick()
         startX = t.location(in: self).x; fingerX = startX
         startOffset = offset; startTime = Date(); moved = false
+        pullStart = pull; pulling = false
         lastSample = (startX, ProcessInfo.processInfo.systemUptime); velocity = 0
         onInteract?()
         holdTimer?.invalidate()
@@ -158,7 +203,8 @@ final class QueueStrip: NSView {
     }
 
     private func pickUp() {
-        guard !moved, let i = index(at: startX) else { return }
+        guard !moved, startX >= pull, let i = index(at: startX) else { return }
+        if pull > 0 { setPull(0, animated: true) }
         lifted = i; liftOrigin = i
         grabDX = startX - (xs[i] - offset)
         let p = pills[i]
@@ -183,7 +229,16 @@ final class QueueStrip: NSView {
             setOffset(offset)
             return
         }
-        if !moved && abs(x - startX) > 6 { moved = true; holdTimer?.invalidate(); onInteract?() }
+        if !moved && abs(x - startX) > 6 {
+            moved = true; holdTimer?.invalidate(); onInteract?()
+            // at the start of the list, a swipe right (or any swipe while Clear shows) moves the Clear pill
+            pulling = onClear != nil && !items.isEmpty && startOffset <= 0.5 && (x > startX || pullStart > 0)
+        }
+        if moved && pulling {
+            let dx = x - startX
+            setPull(pullStart + (dx > 0 ? dx * 0.6 : dx), animated: false)
+            return
+        }
         if moved {
             setOffset(startOffset - (x - startX))
             let now = ProcessInfo.processInfo.systemUptime
@@ -199,6 +254,15 @@ final class QueueStrip: NSView {
         holdTimer?.invalidate()
         stopTick()
         onInteract?()
+        if pulling {
+            pulling = false
+            setPull(pull > maxPull * 0.55 && !cancelled ? maxPull : 0, animated: true)
+            return
+        }
+        if pull > 0 && !moved && !cancelled && lifted == nil {
+            if startX < pull { setPull(0, animated: true); onClear?(); return }   // tapped Clear
+            setPull(0, animated: true); return                                   // tapped elsewhere: tuck it away
+        }
         if let l = lifted {
             let p = pills[l]
             let trashIt = overTrash && !cancelled

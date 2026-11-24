@@ -27,7 +27,10 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `Sources/SpotifyQueue.swift`: Spotify's Up Next, editable in both UIs. Edits go through `library.py spotify-jump` and `spotify-replace`, which replays the current song plus the edited list.
   - IDs stay stable across refreshes, keyed by uri plus occurrence.
   - Edits run one at a time; later edits are merged into the next replay.
-  - Replays are refused while Spotify is paused, because replaying would start the audio.
+  - Paused replays mute Spotify (AppleScript `sound volume`), replay, pause, seek, then unmute.
+  - Each replay re-reads the queue afterwards: Spotify returns 200 but ignores edits to its autoplay suggestions.
+  - While the bar's Up Next shows Spotify, `followSpotifyQueue()` reloads it on song change and every 6 s.
+  - `QueueStrip.onClear`: swiping right at the start of the list reveals a red Clear pill.
 - `BarAwake` (bottom of `main.swift`) keeps the Touch Bar lit with `IOPMAssertionDeclareUserActivity`. It tells real input apart by `HIDIdleTime` dropping below the time since its own declaration.
 - `Sources/Visualizer.swift`: `AudioTap` (FFT into band levels) and `VisualizerView`. The audio source is:
   - LyricsBar's own player: `MTAudioProcessingTap` on each `AVPlayerItem`

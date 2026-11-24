@@ -1208,6 +1208,19 @@ final class BarView: NSView {
             if self.stripIsSpotify { SpotifyQueue.shared.reorder(ids) { err in if let err { self.toast(err, seconds: 3) } } }
             else { StreamPlayer.shared.reorderUpcoming(ids) }
         }
+        queueStrip.onClear = { [weak self] in
+            guard let self else { return }
+            if self.stripIsSpotify {
+                SpotifyQueue.shared.clear { err in if let err { self.toast(err, seconds: 3) } }
+                self.queueStrip.entries = []
+                self.closePicker()
+                self.toast("Cleared Up Next", seconds: 1.5)
+            } else {
+                StreamPlayer.shared.clearUpcoming()
+                self.closePicker()
+                self.toast("Cleared Up Next", seconds: 1.5)
+            }
+        }
         queueStrip.onRemove = { [weak self] e in
             guard let self, let u = e.uid else { return }
             if self.stripIsSpotify { SpotifyQueue.shared.remove(id: u) { err in if let err { self.toast(err, seconds: 3) } } }
@@ -2386,6 +2399,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         }
         updateBackgroundMode()
         updatePausedScreen()
+        followSpotifyQueue()
         BarAwake.shared.tick(playing: view.isPlaying)
         view.updateProgress()
         driveVisualizer()
@@ -2451,6 +2465,19 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         }
         if cfg.pausedBuiltinQuotes || out.isEmpty { out += BuiltinQuotes.all }
         return out
+    }
+
+    /// While Spotify's Up Next is open on the bar, reload it when the song changes and every few seconds.
+    var spotifyQueueCheck = Date.distantPast
+    var spotifyQueueTitle = ""
+    func followSpotifyQueue() {
+        guard view.pickerMode, view.showingUpNext, view.stripIsSpotify, !view.queueStrip.isHolding,
+              !SpotifyQueue.shared.busy else { return }
+        let changed = lastTitle != spotifyQueueTitle
+        guard changed || Date().timeIntervalSince(spotifyQueueCheck) > 6 else { return }
+        spotifyQueueTitle = lastTitle; spotifyQueueCheck = Date()
+        // a song change takes Spotify a moment to reflect in its queue
+        DispatchQueue.main.asyncAfter(deadline: .now() + (changed ? 1.0 : 0)) { SpotifyQueue.shared.refresh() }
     }
 
     func checkOutro() {
