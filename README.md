@@ -87,13 +87,24 @@ Playlists are managed in the Library's **Playlists** section. Pinned playlists a
 
 - **Subsonic / Navidrome**: sign in with your server URL, username and password. Only a salted token is stored, never the password.
 - **Spotify**: create an app at developer.spotify.com with the redirect URI `http://127.0.0.1:8898/callback`, then paste its Client ID under Providers → Spotify. Playback happens in the Spotify app.
-  - Up Next is editable on the Touch Bar and in the Library (needs Premium). Spotify's API can only read and add to the queue; it can't remove, reorder or clear. So LyricsBar rebuilds the queue: Spotify is muted for a moment, the old queue is skipped through, and your edited list starts.
-  - While a song plays, edits show up straight away but are sent to Spotify in the song's last second, so the song isn't interrupted. Expect a short gap before the next song. While paused, edits are sent at once and the song stays where it was.
-  - Shuffle is turned off, and afterwards Spotify doesn't continue with the rest of the original playlist; its autoplay may continue with similar songs.
-  - The skipped songs are skipped within a second, so they don't count as plays, but they may appear in Spotify's recently played.
-  - Edits also work while paused; the song stays paused.
-  - "Play Now" skips to the song with Spotify muted, so you don't hear the songs in between. **Clear** leaves just the current song; Spotify stops after it.
-  - If you connected Spotify before this feature existed, reconnect it once to grant playback control.
+  - Up Next is editable on the Touch Bar and in the Library (needs Premium). See the quirks below.
+  - Hold a playlist in the picker to queue it (up to 100 songs). This works for playlists you made, not ones you only follow.
+  - If you connected Spotify before these features existed, reconnect it once to grant playback control.
+
+#### Spotify queue quirks
+
+Spotify's Web API can only read the queue and add to it. It has no way to remove, reorder or clear songs, and it can't change the queue without also changing the song that's playing. LyricsBar works around that, with some side effects:
+
+- **How an edit works:** LyricsBar mutes Spotify, skips through the old queue to empty it, starts your edited list, then unmutes.
+- **Edits wait for the song to end.** While a song plays, your edits show in Up Next straight away, but Spotify only gets them in the song's last second, so the song isn't interrupted. Expect a gap of a second or two before the next song. If you skip the song, the edits go through right away.
+- **While paused, edits go through at once.** The song stays paused at the same spot.
+- **"Play Now"** skips to the song with Spotify muted, so you don't hear the songs in between.
+- **Clear** leaves just the current song. Spotify stops when it ends.
+- **The original playlist doesn't continue.** After an edit, Spotify plays your edited list instead of the playlist or album you started, then its autoplay may continue with similar songs. Shuffle is turned off.
+- **Skipped songs may show up in Spotify's recently played.** They're skipped within a second, so they don't count as plays.
+- **Local files** in the queue can't be re-queued, so a queue containing them can't be edited.
+- **The queue Spotify reports can lag.** Up Next on the bar reloads when the song changes and every few seconds, but Spotify sometimes takes a moment to catch up.
+
 - **Apple Music**: uses the Music app through AppleScript.
 
 ### Scrobbling
