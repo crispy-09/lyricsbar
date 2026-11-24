@@ -10,3 +10,4 @@ cache/
 *.log
 *.pem
 *.p12
+sign-id

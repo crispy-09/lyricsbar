@@ -1,3 +1,5 @@
+<p align="center"><img src="Resources/icon/icon_1024.png" width="160" alt="LyricsBar icon"></p>
+
 # LyricsBar
 
 Synced lyrics, album art and media controls on the MacBook Pro Touch Bar, plus a built-in Subsonic / Navidrome player with a library window.
@@ -30,6 +32,20 @@ cd lyricsbar
 - builds the app into `~/Applications/LyricsBar Stable.app` and creates a `~/Applications/LyricsBar.app` symlink to it
 - copies the helper scripts to `~/.touchbar-lyrics/`
 - installs two LaunchAgents: one for the app and one for the lyrics daemon (`lyricsd.py`). Both start at login and restart if they quit.
+
+### Updating
+
+```sh
+git pull
+./install.sh
+```
+
+Running `install.sh` again updates in place:
+- It builds the new version first and only swaps it in if the build succeeds.
+- It replaces the helper scripts and restarts both services.
+- It keeps everything in `~/.touchbar-lyrics` (settings, saved queue, lyrics cache, scrobble queue) and your logins in the Keychain.
+- If you signed with `LYRICSBAR_SIGN_ID`, it reuses the same certificate.
+- It prints the old and new version.
 
 macOS will ask for **System Audio Recording** permission the first time the visualizer runs on another app's audio. It also asks for **Automation** permission the first time LyricsBar controls Spotify or Music.
 

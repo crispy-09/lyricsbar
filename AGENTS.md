@@ -26,6 +26,9 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `scripts/lyricsd.py`: the lyrics daemon.
   - It runs `media-control stream`, then writes `state.json`, `artwork.jpg` and `current.txt` (the current lyric line).
   - It caches LRC in `cache/<md5(artist|title)>.json`.
+- `Resources/`: `Info.plist` (bump `CFBundleShortVersionString` for releases; `install.sh` prints old → new) and `AppIcon.icns`.
+  - The icon is drawn in code by `Resources/icon/make_icon.swift`. Regenerate the `.icns` with `Resources/icon/make_icns.sh`.
+- `build.sh` builds into `<name>.building.app` and swaps it in only on success. `install.sh` is also the updater: it never touches `~/.touchbar-lyrics` data or the Keychain, and it remembers the signing identity in `~/.touchbar-lyrics/sign-id`.
 - `scripts/library.py`: the playlist CLI the app calls.
   - It gets credentials as JSON on **stdin** and returns refreshed tokens as `{"__result": …, "__creds": …}`.
   - It must never write credentials to disk.
