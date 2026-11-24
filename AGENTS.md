@@ -12,7 +12,7 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `Sources/Library.swift`: the main window, with SwiftUI `NavigationSplitView`.
   - The sidebar mixes library sections and Settings sections (`SidebarItem`).
   - `LibraryWindow.toggle(settings:)` backs the 📚 button and the hold on the album art.
-- `Sources/Settings.swift`: the Settings panes (General, Appearance, Providers, Pinned, Edit Playlists). `SettingsWindow` is now just a shim onto `LibraryWindow`.
+- `Sources/Settings.swift`: the Settings panes (General, Appearance, Providers, Discord), plus `PlaylistEditor` (a sheet opened from Library → Playlists). `SettingsWindow` is now just a shim onto `LibraryWindow`.
 - `Sources/Config.swift`: `Config` (Codable) is stored in `~/.touchbar-lyrics/config.json`. `lyricsd.py` reads it too.
   - New fields need a default value; `Config.load()` merges the file over the defaults.
 - `Sources/Subsonic.swift`: the Subsonic API client.
@@ -63,7 +63,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `apps` | Press the 📚 button |
 | `arthold` | Hold the album art |
 | `library <Section>` | Open a Library section (`Up Next`, `Lyrics`, `Search`, `Liked Songs`, `Albums`, `Artists`, `Playlists`, `Spotify`) |
-| `settings <Section>` | Open a Settings section (`General`, `Appearance`, `Providers`, `Pinned Playlists`, `Subsonic Playlists`) |
+| `settings <Section>` | Open a Settings section (`General`, `Appearance`, `Providers`, `Discord`). Playlists, including pins and editing, live in `library Playlists` |
 | `qstate` | Write the queue state |
 | `viz` | Write the visualizer frames and levels |
 | `toast <text>`, `text <s>`, `qpreview` | UI checks |

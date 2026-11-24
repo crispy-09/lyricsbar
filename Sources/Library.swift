@@ -207,7 +207,7 @@ struct LibraryView: View {
                 }
                 Section("Settings") {
                     ForEach(SettingsSection.allCases) { s in
-                        Label(s == .subsonic ? "Edit Playlists" : s.rawValue, systemImage: s.icon).tag(SidebarItem.settings(s))
+                        Label(s.rawValue, systemImage: s.icon).tag(SidebarItem.settings(s))
                     }
                 }
             }
@@ -544,37 +544,90 @@ struct ArtistDetail: View {
 }
 
 struct PlaylistsView: View {
-    @State private var playlists: [SPlaylist] = []
+    @StateObject var m = SubsonicManager()
     @ObservedObject var store = ConfigStore.shared
+    @State private var nameDraft = ""
+    @State private var showNew = false
+    @State private var renaming: SPlaylist?
+    @State private var deleting: SPlaylist?
+    @State private var editing: SPlaylist?
     var body: some View {
-        List(playlists) { p in
-            NavigationLink(value: p) {
-                HStack {
-                    Image(systemName: "music.note.list").foregroundStyle(.secondary).frame(width: 24)
-                    Text(p.name)
-                    Spacer()
-                    Text("\(p.songCount) songs").foregroundStyle(.secondary)
+        List {
+            if !store.c.pinned.isEmpty {
+                Section {
+                    ForEach(store.c.pinned) { p in
+                        HStack {
+                            Image(systemName: "pin.fill").foregroundStyle(.orange).frame(width: 24)
+                            Text(p.name)
+                            Spacer()
+                            Text(p.provider == "subsonic" ? "Subsonic" : p.provider.capitalized).foregroundStyle(.secondary)
+                            Button { store.c.pinned.removeAll { $0.id == p.id } } label: { Image(systemName: "pin.slash") }
+                                .buttonStyle(.borderless).help("Unpin")
+                        }
+                    }
+                    .onMove { store.c.pinned.move(fromOffsets: $0, toOffset: $1) }
+                } header: {
+                    Text("Pinned on the Touch Bar")
+                } footer: {
+                    Text("Shown first in the Touch Bar picker. Drag to reorder.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .contextMenu {
-                Button("Play") { Task { if let s = try? await Subsonic.playlist(p.id).1 { playSongs(s) } } }
-                Button("Shuffle") { Task { if let s = try? await Subsonic.playlist(p.id).1 { playSongs(s, shuffle: true) } } }
-                Button(store.isPinned("subsonic", p.id) ? "Unpin from Touch Bar" : "Pin to Touch Bar") {
-                    store.togglePin("subsonic", p.id, p.name)
+            Section("Playlists") {
+                if let e = m.error { Text(e).foregroundStyle(.secondary) }
+                ForEach(m.playlists) { p in
+                    NavigationLink(value: p) {
+                        HStack {
+                            Image(systemName: "music.note.list").foregroundStyle(.secondary).frame(width: 24)
+                            Text(p.name)
+                            if store.isPinned("subsonic", p.id) { Image(systemName: "pin.fill").foregroundStyle(.orange).font(.caption) }
+                            Spacer()
+                            Text("\(p.songCount) songs").foregroundStyle(.secondary)
+                        }
+                    }
+                    .contextMenu {
+                        Button("Play") { Task { if let s = try? await Subsonic.playlist(p.id).1 { playSongs(s) } } }
+                        Button("Shuffle") { Task { if let s = try? await Subsonic.playlist(p.id).1 { playSongs(s, shuffle: true) } } }
+                        Divider()
+                        Button(store.isPinned("subsonic", p.id) ? "Unpin from Touch Bar" : "Pin to Touch Bar") {
+                            store.togglePin("subsonic", p.id, p.name)
+                        }
+                        Button("Edit Songs…") { editing = p }
+                        Button("Rename…") { nameDraft = p.name; renaming = p }
+                        Button("Delete…", role: .destructive) { deleting = p }
+                    }
                 }
             }
         }
         .navigationTitle("Playlists")
         .toolbar {
-            Button { SettingsWindow.shared.show(.subsonic) } label: { Label("Edit Playlists", systemImage: "pencil") }
+            if m.busy { ProgressView().controlSize(.small) }
+            Button { nameDraft = ""; showNew = true } label: { Label("New Playlist", systemImage: "plus") }
         }
-        .task { playlists = (try? await Subsonic.playlists()) ?? [] }
+        .onAppear { m.reloadPlaylists() }
+        .alert("New playlist", isPresented: $showNew) {
+            TextField("Name", text: $nameDraft)
+            Button("Create") { m.create(nameDraft) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .alert("Rename playlist", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $nameDraft)
+            Button("Rename") { if let p = renaming { m.rename(p.id, nameDraft) } }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete “\(deleting?.name ?? "")” from your server?",
+                            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+            Button("Delete", role: .destructive) { if let p = deleting { m.delete(p.id) } }
+        }
+        .sheet(item: $editing, onDismiss: { m.reloadPlaylists() }) { p in
+            PlaylistEditor(playlistId: p.id) { editing = nil }
+        }
     }
 }
 
 struct PlaylistDetail: View {
     let playlist: SPlaylist
     @State private var songs: [SSong] = []
+    @State private var editing = false
     @ObservedObject var store = ConfigStore.shared
     var body: some View {
         ScrollView {
@@ -587,6 +640,7 @@ struct PlaylistDetail: View {
                         Text("\(songs.count) songs · \(mmss(songs.reduce(0) { $0 + $1.duration }))").foregroundStyle(.secondary)
                         HStack {
                             PlayButtons(songs: songs)
+                            Button("Edit") { editing = true }
                             Button {
                                 store.togglePin("subsonic", playlist.id, playlist.name)
                             } label: {
@@ -603,6 +657,9 @@ struct PlaylistDetail: View {
         }
         .navigationTitle(playlist.name)
         .task { songs = (try? await Subsonic.playlist(playlist.id).1) ?? [] }
+        .sheet(isPresented: $editing, onDismiss: { Task { songs = (try? await Subsonic.playlist(playlist.id).1) ?? [] } }) {
+            PlaylistEditor(playlistId: playlist.id) { editing = false }
+        }
     }
 }
 

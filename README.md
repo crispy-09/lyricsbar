@@ -75,10 +75,12 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 
 Everything else is in **Settings** (Library window sidebar, or ⌘,):
 
-- **General**: what ▶ starts when nothing is loaded, shuffle, resume, crossfade, lyric gestures, auto-hide timers, Touch Bar sleep, and what the bar shows while paused (lyrics, media controls, title and artist, rotating quotes, or your own phrase)
-- **Appearance**: background (how long the album art stays after pausing), lyrics, visualizer, buttons. With a rotating wallpaper the background is black, because macOS doesn't report which picture is showing
+- **General**: what ▶ starts when nothing is loaded, shuffle, resume, crossfade, lyric gestures, auto-hide timers, Touch Bar sleep
+- **Appearance**: background (how long the album art stays after pausing), lyrics, what the bar shows while paused (lyrics, media controls, title and artist, rotating quotes, or your own phrase), visualizer, buttons. With a rotating wallpaper the background is black, because macOS doesn't report which picture is showing
 - **Providers**: the providers shown in the picker, scrobbling, accounts
-- **Pinned Playlists** and **Edit Playlists** (Subsonic)
+- **Discord**: Rich Presence
+
+Playlists are managed in the Library's **Playlists** section. Pinned playlists are listed at the top; drag to reorder, or unpin. Use + for a new playlist, right-click a playlist to pin, rename, delete or edit its songs, or use **Edit** on a playlist's page.
 
 ### Providers
 

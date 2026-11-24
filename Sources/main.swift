@@ -2169,8 +2169,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                       action: #selector(switchVersion), keyEquivalent: "").target = self
         }
         m.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
-        m.addItem(withTitle: "Pinned Playlists…", action: #selector(openPins), keyEquivalent: "").target = self
-        m.addItem(withTitle: "Manage Subsonic Playlists…", action: #selector(openSubsonic), keyEquivalent: "").target = self
+        m.addItem(withTitle: "Playlists…", action: #selector(openPlaylists), keyEquivalent: "").target = self
         m.addItem(.separator())
         m.addItem(withTitle: "Restart LyricsBar", action: #selector(restart), keyEquivalent: "").target = self
         s.menu = m
@@ -2192,8 +2191,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
 
     @objc func openLibrary() { LibraryWindow.shared.show() }
     @objc func openSettings() { SettingsWindow.shared.show(.general) }
-    @objc func openPins() { SettingsWindow.shared.show(.pinned) }
-    @objc func openSubsonic() { SettingsWindow.shared.show(.subsonic) }
+    @objc func openPlaylists() { LibraryWindow.shared.show(.playlists) }
     @objc func restart() { exit(0) }   // launchd's KeepAlive starts it again
 
     func touchBar(_ tb: NSTouchBar, makeItemForIdentifier id: NSTouchBarItem.Identifier) -> NSTouchBarItem? {

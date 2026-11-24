@@ -13,15 +13,13 @@ final class SettingsWindow {
 
 enum SettingsSection: String, CaseIterable, Identifiable {
     case general = "General", appearance = "Appearance", providers = "Providers"
-    case pinned = "Pinned Playlists", subsonic = "Subsonic Playlists", discord = "Discord"
+    case discord = "Discord"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .general: return "gearshape"
         case .appearance: return "paintbrush"
         case .providers: return "square.stack.3d.up"
-        case .pinned: return "pin"
-        case .subsonic: return "music.note.list"
         case .discord: return "bubble.left.and.bubble.right"
         }
     }
@@ -35,8 +33,6 @@ struct SettingsDetail: View {
         case .general: GeneralPane()
         case .appearance: AppearancePane()
         case .providers: ProvidersPane()
-        case .pinned: PinnedPane()
-        case .subsonic: SubsonicPane()
         case .discord: DiscordPane()
         }
     }
@@ -91,37 +87,6 @@ struct GeneralPane: View {
                 }
                 Text("Show controls opens the scrubber with play, skip and the queue. Swipe left or right to skip songs.")
                     .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("While paused") {
-                Picker("The bar shows", selection: $store.c.pausedShows) {
-                    Text("The lyrics (as now)").tag("lyrics")
-                    Text("Media controls").tag("controls")
-                    Text("Title and artist").tag("title")
-                    Text("Rotating quotes").tag("quotes")
-                    Text("My own phrase").tag("phrase")
-                }
-                if store.c.pausedShows != "lyrics" {
-                    LabeledSlider(title: "After pausing for", value: $store.c.pausedDelay, range: 0...15, step: 1, format: secs)
-                }
-                switch store.c.pausedShows {
-                case "controls":
-                    Text("The scrubber and buttons stay up until you play again.").font(.caption).foregroundStyle(.secondary)
-                case "phrase":
-                    TextField("Phrase", text: $store.c.pausedPhrase, prompt: Text("Paused · {title}"))
-                    Text("{title} and {artist} are filled in.").font(.caption).foregroundStyle(.secondary)
-                case "quotes":
-                    LabeledSlider(title: "Next quote every", value: $store.c.pausedQuoteSeconds, range: 60...600, step: 60,
-                                  format: { let m = Int(($0 / 60).rounded()); return m == 1 ? "1 min" : "\(m) min" })
-                    Toggle("Include the built-in music quotes", isOn: $store.c.pausedBuiltinQuotes)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Your quotes, one per line")
-                        TextEditor(text: $store.c.pausedQuotes)
-                            .font(.body).frame(minHeight: 70).scrollContentBackground(.hidden)
-                            .padding(4).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-                        Text("Write \"quote — author\" to show who said it.").font(.caption).foregroundStyle(.secondary)
-                    }
-                default: EmptyView()
-                }
             }
             Section("Touch Bar sleep") {
                 Picker("Let the Touch Bar sleep", selection: $store.c.barSleepMinutes) {
@@ -190,6 +155,7 @@ struct LyricsSections: View {
 }
 
 struct AppearancePane: View {
+    var secs: (Double) -> String = { String(format: "%.0fs", $0) }
     @ObservedObject var store = ConfigStore.shared
     var color: Binding<Color> {
         Binding(get: { Color(nsColor: NSColor(hex: store.c.solidColor) ?? .black) },
@@ -227,6 +193,37 @@ struct AppearancePane: View {
                 }
             }
             LyricsSections()
+            Section("While paused") {
+                Picker("The bar shows", selection: $store.c.pausedShows) {
+                    Text("The lyrics (as now)").tag("lyrics")
+                    Text("Media controls").tag("controls")
+                    Text("Title and artist").tag("title")
+                    Text("Rotating quotes").tag("quotes")
+                    Text("My own phrase").tag("phrase")
+                }
+                if store.c.pausedShows != "lyrics" {
+                    LabeledSlider(title: "After pausing for", value: $store.c.pausedDelay, range: 0...15, step: 1, format: secs)
+                }
+                switch store.c.pausedShows {
+                case "controls":
+                    Text("The scrubber and buttons stay up until you play again.").font(.caption).foregroundStyle(.secondary)
+                case "phrase":
+                    TextField("Phrase", text: $store.c.pausedPhrase, prompt: Text("Paused · {title}"))
+                    Text("{title} and {artist} are filled in.").font(.caption).foregroundStyle(.secondary)
+                case "quotes":
+                    LabeledSlider(title: "Next quote every", value: $store.c.pausedQuoteSeconds, range: 60...600, step: 60,
+                                  format: { let m = Int(($0 / 60).rounded()); return m == 1 ? "1 min" : "\(m) min" })
+                    Toggle("Include the built-in music quotes", isOn: $store.c.pausedBuiltinQuotes)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Your quotes, one per line")
+                        TextEditor(text: $store.c.pausedQuotes)
+                            .font(.body).frame(minHeight: 70).scrollContentBackground(.hidden)
+                            .padding(4).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+                        Text("Write \"quote — author\" to show who said it.").font(.caption).foregroundStyle(.secondary)
+                    }
+                default: EmptyView()
+                }
+            }
             VisualizerSections()
             Section("Buttons") {
                 Picker("Style", selection: $store.c.buttonStyle) {
@@ -302,78 +299,6 @@ func loadPlaylists(_ provider: String) async -> Result<[PlaylistRow], Error> {
     }
 }
 
-struct PinnedPane: View {
-    @ObservedObject var store = ConfigStore.shared
-    @State var provider = "subsonic"
-    @State var rows: [PlaylistRow] = []
-    @State var error: String?
-    @State var loading = false
-
-    var body: some View {
-        VSplitView {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Pinned — shown first when you tap the album art. Drag to reorder.")
-                    .font(.callout).foregroundStyle(.secondary)
-                List {
-                    ForEach(store.c.pinned) { p in
-                        HStack {
-                            Image(systemName: "pin.fill").foregroundStyle(.orange)
-                            Text(p.name)
-                            Spacer()
-                            Text(p.provider.capitalized).foregroundStyle(.secondary)
-                            Button { store.c.pinned.removeAll { $0.id == p.id } } label: { Image(systemName: "xmark.circle.fill") }
-                                .buttonStyle(.borderless).foregroundStyle(.secondary)
-                        }
-                    }
-                    .onMove { store.c.pinned.move(fromOffsets: $0, toOffset: $1) }
-                    if store.c.pinned.isEmpty {
-                        Text("Nothing pinned yet — pick some below.").foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .padding()
-            .frame(minHeight: 160)
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Picker("", selection: $provider) {
-                        Text("Subsonic").tag("subsonic")
-                        Text("Spotify").tag("spotify")
-                    }
-                    .pickerStyle(.segmented).labelsHidden().frame(width: 220)
-                    if loading { ProgressView().controlSize(.small) }
-                    Spacer()
-                    Button { Task { await reload() } } label: { Image(systemName: "arrow.clockwise") }
-                }
-                if let error { Text(error).foregroundStyle(.red) }
-                List(rows) { r in
-                    HStack {
-                        Text(r.name)
-                        if r.count > 0 { Text("\(r.count) songs").foregroundStyle(.secondary) }
-                        Spacer()
-                        let pinned = store.isPinned(provider, r.id)
-                        Button(pinned ? "Unpin" : "Pin") { store.togglePin(provider, r.id, r.name) }
-                            .buttonStyle(.bordered).tint(pinned ? .orange : nil)
-                    }
-                }
-            }
-            .padding()
-            .frame(minHeight: 200)
-        }
-        .navigationTitle("Pinned Playlists")
-        .task(id: provider) { await reload() }
-    }
-
-    @MainActor func reload() async {
-        loading = true; error = nil
-        switch await loadPlaylists(provider) {
-        case .success(let r): rows = r
-        case .failure(let e): rows = []; error = e.localizedDescription
-        }
-        loading = false
-    }
-}
-
 // MARK: - Subsonic playlist manager
 
 @MainActor final class SubsonicManager: ObservableObject {
@@ -442,136 +367,90 @@ func mmss(_ s: Int) -> String {
     s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
 }
 
-struct SubsonicPane: View {
+/// Edit a Subsonic playlist: reorder, remove, search to add, rename, delete. Opened from Library → Playlists.
+struct PlaylistEditor: View {
     @StateObject var m = SubsonicManager()
     @ObservedObject var store = ConfigStore.shared
+    let playlistId: String
+    var onClose: () -> Void
     @State var query = ""
     @State var nameDraft = ""
-    @State var showNew = false
     @State var showRename = false
     @State var confirmDelete = false
 
     var current: SPlaylist? { m.playlists.first { $0.id == m.selected } }
 
     var body: some View {
-        Group {
-            if Subsonic.auth == nil {
-                ContentUnavailableView("Subsonic isn't connected", systemImage: "server.rack",
-                                       description: Text("Sign in under Providers first."))
-            } else {
-                HSplitView {
-                    playlistList.frame(minWidth: 200, idealWidth: 230, maxWidth: 320)
-                    detail.frame(minWidth: 380)
-                }
-            }
-        }
-        .navigationTitle("Edit Playlists")
-        .toolbar {
-            if m.busy { ProgressView().controlSize(.small) }
-            Button { m.reloadPlaylists(); m.reloadSongs() } label: { Image(systemName: "arrow.clockwise") }
-        }
-        .onAppear { if Subsonic.auth != nil { m.reloadPlaylists() } }
-        .onChange(of: m.selected) { m.reloadSongs() }
-        .alert("New playlist", isPresented: $showNew) {
-            TextField("Name", text: $nameDraft)
-            Button("Create") { m.create(nameDraft) }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert("Rename playlist", isPresented: $showRename) {
-            TextField("Name", text: $nameDraft)
-            Button("Rename") { if let id = m.selected { m.rename(id, nameDraft) } }
-            Button("Cancel", role: .cancel) {}
-        }
-        .confirmationDialog("Delete “\(current?.name ?? "")” from your server?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) { if let id = m.selected { m.delete(id) } }
-        }
-    }
-
-    var playlistList: some View {
-        VStack(spacing: 0) {
-            List(m.playlists, selection: $m.selected) { p in
-                HStack {
-                    if store.isPinned("subsonic", p.id) { Image(systemName: "pin.fill").foregroundStyle(.orange).font(.caption) }
-                    Text(p.name)
-                    Spacer()
-                    Text("\(p.songCount)").foregroundStyle(.secondary).monospacedDigit()
-                }
-                .tag(p.id)
-                .contextMenu {
-                    Button(store.isPinned("subsonic", p.id) ? "Unpin" : "Pin") { store.togglePin("subsonic", p.id, p.name) }
-                    Button("Rename…") { m.selected = p.id; nameDraft = p.name; showRename = true }
-                    Button("Delete…", role: .destructive) { m.selected = p.id; confirmDelete = true }
-                }
-            }
-            HStack {
-                Button { nameDraft = ""; showNew = true } label: { Image(systemName: "plus") }
-                Button { confirmDelete = true } label: { Image(systemName: "minus") }.disabled(m.selected == nil)
-                Spacer()
-            }
-            .buttonStyle(.borderless).padding(8)
-        }
-    }
-
-    var detail: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let p = current {
-                HStack(alignment: .center) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(p.name).font(.title2.bold()).lineLimit(1).truncationMode(.tail)
-                        Text("\(p.songCount) songs · \(mmss(p.duration))").foregroundStyle(.secondary)
-                    }
-                    .layoutPriority(1)
-                    Spacer()
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(current?.name ?? "Playlist").font(.title2.bold()).lineLimit(1).truncationMode(.tail)
+                    if let p = current { Text("\(p.songCount) songs · \(mmss(p.duration))").foregroundStyle(.secondary) }
+                }
+                .layoutPriority(1)
+                Spacer()
+                if m.busy { ProgressView().controlSize(.small) }
+                if let p = current {
                     Button { store.togglePin("subsonic", p.id, p.name) } label: {
                         Label(store.isPinned("subsonic", p.id) ? "Pinned" : "Pin",
                               systemImage: store.isPinned("subsonic", p.id) ? "pin.fill" : "pin")
                     }
                     Button("Rename…") { nameDraft = p.name; showRename = true }
+                    Button("Delete…", role: .destructive) { confirmDelete = true }
                 }
-                if let e = m.error { Text(e).foregroundStyle(.red) }
-                List {
-                    ForEach(Array(m.songs.enumerated()), id: \.element.uid) { i, s in
-                        HStack {
-                            Text("\(i + 1)").foregroundStyle(.secondary).monospacedDigit().frame(width: 28, alignment: .trailing)
-                            VStack(alignment: .leading) {
-                                Text(s.title)
-                                Text("\(s.artist) — \(s.album)").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(mmss(s.duration)).foregroundStyle(.secondary).monospacedDigit()
+                Button("Done") { onClose() }.keyboardShortcut(.defaultAction)
+            }
+            if let e = m.error { Text(e).foregroundStyle(.red) }
+            List {
+                ForEach(Array(m.songs.enumerated()), id: \.element.uid) { i, s in
+                    HStack {
+                        Text("\(i + 1)").foregroundStyle(.secondary).monospacedDigit().frame(width: 28, alignment: .trailing)
+                        VStack(alignment: .leading) {
+                            Text(s.title)
+                            Text("\(s.artist) — \(s.album)").font(.caption).foregroundStyle(.secondary)
                         }
-                        .contextMenu { Button("Remove from playlist", role: .destructive) { m.remove(IndexSet(integer: i)) } }
+                        Spacer()
+                        Text(mmss(s.duration)).foregroundStyle(.secondary).monospacedDigit()
                     }
-                    .onMove { m.move($0, $1) }
-                    .onDelete { m.remove($0) }
+                    .contextMenu { Button("Remove from playlist", role: .destructive) { m.remove(IndexSet(integer: i)) } }
                 }
-                .frame(minHeight: 180)
-                Text("Drag to reorder · right-click a song to remove it").font(.caption).foregroundStyle(.secondary)
-                Divider()
-                HStack {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search your library to add songs…", text: $query)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { m.search(query) }
-                }
-                if !m.results.isEmpty {
-                    List(m.results, id: \.uid) { s in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(s.title)
-                                Text("\(s.artist) — \(s.album)").font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button { m.add(s) } label: { Image(systemName: "plus.circle.fill") }.buttonStyle(.borderless)
+                .onMove { m.move($0, $1) }
+                .onDelete { m.remove($0) }
+            }
+            .frame(minHeight: 200)
+            Text("Drag to reorder · right-click a song to remove it").font(.caption).foregroundStyle(.secondary)
+            Divider()
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search your library to add songs…", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { m.search(query) }
+            }
+            if !m.results.isEmpty {
+                List(m.results, id: \.uid) { s in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(s.title)
+                            Text("\(s.artist) — \(s.album)").font(.caption).foregroundStyle(.secondary)
                         }
+                        Spacer()
+                        Button { m.add(s) } label: { Image(systemName: "plus.circle.fill") }.buttonStyle(.borderless)
                     }
-                    .frame(minHeight: 120, maxHeight: 200)
                 }
-            } else {
-                ContentUnavailableView("No playlist selected", systemImage: "music.note.list")
+                .frame(minHeight: 120, maxHeight: 200)
             }
         }
         .padding()
+        .frame(minWidth: 620, minHeight: 560)
+        .onAppear { m.selected = playlistId; m.reloadPlaylists(); m.reloadSongs() }
+        .alert("Rename playlist", isPresented: $showRename) {
+            TextField("Name", text: $nameDraft)
+            Button("Rename") { m.rename(playlistId, nameDraft) }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete “\(current?.name ?? "")” from your server?", isPresented: $confirmDelete) {
+            Button("Delete", role: .destructive) { m.delete(playlistId); onClose() }
+        }
     }
 }
 
