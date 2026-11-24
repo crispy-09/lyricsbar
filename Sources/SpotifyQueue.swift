@@ -1,6 +1,7 @@
 // Spotify's Up Next, editable from the Touch Bar strip and the Library window.
-// The Web API can read the queue and skip, but has no remove/reorder: edits replay the current song
-// (same position) followed by the edited list. Needs Spotify Premium and the user-modify-playback-state scope.
+// The Web API can read the queue and add to it, but has no remove/reorder/clear: edits (library.py
+// spotify-replace) mute Spotify, skip through the queue to empty it, then replay the current song (same
+// position) followed by the edited list. Needs Spotify Premium and the user-modify-playback-state scope.
 import Foundation
 
 final class SpotifyQueue: ObservableObject {

@@ -195,13 +195,7 @@ def spotify_jump(uri, hint):
     if vol is not None:
         _spotify_volume(0)
     try:
-        # the Spotify app's own "next track": local, quick, and no API rate limit
-        script = f'tell application "Spotify"\nrepeat {n} times\nnext track\ndelay 0.08\nend repeat\nend tell'
-        r = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=30)
-        if r.returncode != 0:                              # no Automation permission: fall back to the API
-            for _ in range(n):
-                spotify_api("POST", "/me/player/next")
-                time.sleep(0.12)
+        _spotify_skip(n)
     finally:
         if vol is not None:
             time.sleep(0.4)                                # let the last skip land before the sound comes back
@@ -254,45 +248,64 @@ def _spotify_volume(v=None):
         return None
 
 
+def _spotify_skip(n):
+    """Press "next" n times in the Spotify app (local and fast); falls back to the Web API."""
+    if n <= 0:
+        return
+    script = f'tell application "Spotify"\nrepeat {int(n)} times\nnext track\ndelay 0.08\nend repeat\nend tell'
+    r = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:                                  # no Automation permission
+        for _ in range(n):
+            spotify_api("POST", "/me/player/next")
+            time.sleep(0.12)
+
+
+def _queue_uris():
+    return [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t]
+
+
 def spotify_replace(uris):
-    """Spotify can't remove or reorder queue items, so replay: current song (same position) + the edited list.
-    An empty list clears the queue (only the current song is left)."""
+    """Set Up Next to exactly `uris` (empty = clear), keeping the current song where it is.
+
+    Spotify's Web API can only add to the queue. Songs added with "Add to queue" sit in a separate queue
+    that survives starting new music, so replaying a new list alone doesn't remove them. So, with Spotify
+    muted: skip through everything queued (that empties it), start the current song again followed by the
+    new list, seek back to the same spot, then unmute (and pause again if it was paused)."""
     if len(uris) > 100 or not all(SPOTIFY_URI.match(u) for u in uris):
         raise RuntimeError("invalid song list")
     st = spotify_api("GET", "/me/player")
     if not st or not st.get("item") or not st.get("device"):
         raise RuntimeError("Spotify isn't playing on any device right now")
     playing = bool(st.get("is_playing"))
-    before = [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t][:6]
     dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
-    if st.get("shuffle_state"):                            # a shuffled list would scramble the new order
-        spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
-    t0 = time.time()
+    cur = st["item"]["uri"]
     pos = st.get("progress_ms") or 0
-    # paused: replaying starts playback, so mute Spotify for that moment and pause again before unmuting
-    vol = None if playing else _spotify_volume()
-    if vol is not None:
-        _spotify_volume(0)
+    vol = _spotify_volume()
+    _spotify_volume(0)
     try:
-        spotify_api("PUT", f"/me/player/play?device_id={dev}",
-                    {"uris": [st["item"]["uri"]] + uris, "position_ms": pos})
-        # the desktop app ignores position_ms and restarts the song, so seek back to where it was
-        time.sleep(0.6)
+        if st.get("shuffle_state"):                        # a shuffled list would scramble the new order
+            spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
+        for _ in range(3):                                 # the queue listing shows at most ~20 songs at a time
+            q = _queue_uris()
+            if q:
+                _spotify_skip(len(q))
+                time.sleep(0.4)
+            spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": [cur] + uris})
+            time.sleep(0.6)
+            after = _queue_uris()
+            # done once Up Next starts with the new list (or, for a clear, holds none of the songs we skipped)
+            if (uris and after[:3] == uris[:3]) or (not uris and not set(after[:5]) & set(q)):
+                break
+        else:
+            raise RuntimeError("Spotify didn't take that change. Try again")
         if not playing:
             spotify_api("PUT", f"/me/player/pause?device_id={dev}")
-        now = pos + (int((time.time() - t0) * 1000) if playing else 0)
-        spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
+        # the desktop app ignores position_ms and restarts the song, so seek back to where it was
+        spotify_api("PUT", f"/me/player/seek?position_ms={pos}&device_id={dev}")
     finally:
         if vol is not None:
-            time.sleep(0.3)                                # let the pause land before the sound comes back
+            time.sleep(0.4)                                # let the seek/pause land before the sound comes back
             _spotify_volume(vol)
-    # Spotify answers OK but ignores the new list in some states (seen while it plays autoplay suggestions
-    # after a list ended), so check that the queue really changed
-    if before[:len(uris[:6])] != uris[:6]:
-        time.sleep(0.5)
-        after = [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t][:6]
-        if after == before:
-            raise RuntimeError("Spotify ignored that change. It doesn't let apps edit its autoplay suggestions")
     return {"count": len(uris)}
 
 

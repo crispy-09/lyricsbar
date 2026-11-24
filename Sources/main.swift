@@ -2218,6 +2218,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                        let items = q.items
                                        switch w.count > 1 ? w[1] : "" {
                                        case "skip": if let n, items.indices.contains(n) { q.jump(id: items[n].id) { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } } }
+                                       case "clear": q.clear { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } }
                                        case "remove": if let n, items.indices.contains(n) { q.remove(id: items[n].id) { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } } }
                                        case "move":
                                            let ab = w.dropFirst(2).compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }

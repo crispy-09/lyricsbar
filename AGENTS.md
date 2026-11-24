@@ -27,8 +27,7 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `Sources/SpotifyQueue.swift`: Spotify's Up Next, editable in both UIs. Edits go through `library.py spotify-jump` and `spotify-replace`, which replays the current song plus the edited list.
   - IDs stay stable across refreshes, keyed by uri plus occurrence.
   - Edits run one at a time; later edits are merged into the next replay.
-  - Paused replays mute Spotify (AppleScript `sound volume`), replay, pause, seek, then unmute.
-  - Each replay re-reads the queue afterwards: Spotify returns 200 but ignores edits to its autoplay suggestions.
+  - A replay alone doesn't work: songs added with "Add to queue" live in a separate queue that survives `PUT /me/player/play`. So `spotify_replace` mutes Spotify, skips (AppleScript `next track`) through everything queued, plays the current song + the new list, pauses again if it was paused, seeks back, then unmutes. It checks the result and drains again (up to 3 rounds), since the queue listing shows only ~20 songs.
   - While the bar's Up Next shows Spotify, `followSpotifyQueue()` reloads it on song change and every 6 s.
   - `QueueStrip.onClear`: swiping right at the start of the list reveals a red Clear pill.
 - `BarAwake` (bottom of `main.swift`) keeps the Touch Bar lit with `IOPMAssertionDeclareUserActivity`. It tells real input apart by `HIDIdleTime` dropping below the time since its own declaration.
@@ -75,7 +74,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `toast <text>`, `text <s>`, `qpreview` | UI checks |
 | `discordtest <socket>` / `discordtest off` | Turn presence on against a fake Discord socket (test app ID), then back off. This changes the config, so always run `off` afterwards |
 | `discordpreview` | Write the activity that would be sent, plus the status |
-| `spq`, `spq skip N`, `spq remove N`, `spq move A B` | Read or edit Spotify's Up Next through `SpotifyQueue`, then write the queue to `debug.out`. **Edits change real playback.** Spotify must be playing, because its API returns an empty queue for an idle device |
+| `spq`, `spq skip N`, `spq remove N`, `spq move A B`, `spq clear` | Read or edit Spotify's Up Next through `SpotifyQueue`, then write the queue to `debug.out`. **Edits change real playback.** Spotify must be playing, because its API returns an empty queue for an idle device |
 | `spqpl`, `spqpl N` | List Spotify playlists, or queue playlist N (the picker's hold action). **This changes the real queue**, so use a small playlist |
 | `mutedtest` | Muted playback self-test (play, next, seek, crossfade, previous, pause, restore). No sound, no scrobbles; the log goes to `debug.out` |
 

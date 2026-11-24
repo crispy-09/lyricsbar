@@ -905,7 +905,7 @@ struct SpotifyQueueList: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Drag to reorder · right-click to remove · double-click to play").font(.caption).foregroundStyle(.secondary)
-                    Text("Spotify can't edit its queue directly, so a reorder or removal replays these songs as a new list from where you are now. Shuffle turns off, and the original playlist doesn't continue afterwards (needs Premium). Spotify's autoplay suggestions can't be edited.")
+                    Text("Spotify can't edit its queue directly, so an edit mutes Spotify for a few seconds, skips through the queue to empty it, then plays the current song again from the same spot followed by your edited list. Shuffle turns off, and the original playlist doesn't continue afterwards (needs Premium).")
                         .font(.caption).foregroundStyle(.tertiary)
                     if let note { Text(note).font(.caption).foregroundStyle(.orange) }
                 }
