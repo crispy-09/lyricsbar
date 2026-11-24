@@ -6,6 +6,10 @@ case "$1" in
   beta)   T="LyricsBar Beta.app" ;;
   *) echo "usage: switch.sh stable|beta"; exit 1 ;;
 esac
-cd "$HOME/Applications" && ln -sfn "$T" LyricsBar.app
+cd "$HOME/Applications"
+if [[ ! -d "$T" ]]; then
+  echo "$T isn't installed. Build it with: ./build.sh \"\$HOME/Applications/$T\""; exit 1
+fi
+ln -sfn "$T" LyricsBar.app
 launchctl kickstart -k gui/$(id -u)/com.crispy.lyricsbar
 echo "now running: $T"

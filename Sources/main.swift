@@ -2061,8 +2061,12 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         s.button?.image?.isTemplate = true
         let m = NSMenu()
         m.addItem(withTitle: "Library…", action: #selector(openLibrary), keyEquivalent: "l").target = self
-        m.addItem(withTitle: isBeta ? "Switch to Stable Version" : "Switch to Beta Version",
-                  action: #selector(switchVersion), keyEquivalent: "").target = self
+        // only offer the switch when the other version is actually installed
+        let other = NSHomeDirectory() + "/Applications/" + (isBeta ? "LyricsBar Stable.app" : "LyricsBar Beta.app")
+        if FileManager.default.fileExists(atPath: other) {
+            m.addItem(withTitle: isBeta ? "Switch to Stable Version" : "Switch to Beta Version",
+                      action: #selector(switchVersion), keyEquivalent: "").target = self
+        }
         m.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         m.addItem(withTitle: "Pinned Playlists…", action: #selector(openPins), keyEquivalent: "").target = self
         m.addItem(withTitle: "Manage Subsonic Playlists…", action: #selector(openSubsonic), keyEquivalent: "").target = self
