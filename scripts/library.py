@@ -6,6 +6,7 @@
   library.py tracks subsonic <id>       -> [{"id","title","artist","album","duration","stream","cover"}]
   library.py queue spotify              -> [{"title","artist","album","uri","duration","image"}]
   library.py spotify-jump <uri> <index> -> skip forward to that queued song
+  library.py spotify-queue-playlist <uri> -> add a playlist's songs (max 100) to the end of the queue
   library.py spotify-replace <uri>...   -> replay current song + this list (remove / reorder)
   library.py spotify-login <client_id>  -> one-time Spotify sign-in (opens the browser)
 """
@@ -151,8 +152,10 @@ def spotify_api(method, path, body=None, _retried=False):
             msg = ""
         if e.code in (401, 403) and "scope" in msg.lower():
             raise RuntimeError("Spotify needs new permissions: reconnect it in Settings → Providers (scope)")
-        if e.code == 403:
+        if e.code == 403 and path.startswith("/me/player"):
             raise RuntimeError("Spotify only allows queue changes with Premium" + (f" ({msg})" if msg else ""))
+        if e.code == 403:
+            raise RuntimeError("Spotify won't let this app read that" + (f" ({msg})" if msg else ""))
         if e.code == 404:
             raise RuntimeError("Spotify isn't playing on any device right now")
         raise RuntimeError(f"Spotify answered {e.code}" + (f": {msg}" if msg else ""))
@@ -190,6 +193,40 @@ def spotify_jump(uri, hint):
         spotify_api("POST", "/me/player/next")
         time.sleep(0.12)                                   # keep the skips in order
     return {"skipped": n}
+
+
+def spotify_queue_playlist(pid):
+    """Add a playlist's songs (or Liked Songs) to the end of the queue. Capped at 100: one request per song."""
+    if not re.match(r"^spotify:(playlist:[A-Za-z0-9]{1,64}|user:[A-Za-z0-9._-]{1,64}:collection)$", pid):
+        raise RuntimeError("invalid playlist")
+    st = spotify_api("GET", "/me/player")
+    if not st or not st.get("device"):
+        raise RuntimeError("Spotify isn't playing on any device right now")
+    dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
+    if pid.endswith(":collection"):
+        url = "/me/tracks?limit=50"
+    else:
+        url = f"/playlists/{pid.split(':')[-1]}/items?limit=50"     # the current endpoint (".../tracks" is legacy)
+    uris = []
+    while url and len(uris) < 100:
+        try:
+            r = spotify_api("GET", url) or {}
+        except RuntimeError as e:
+            if "won't let" in str(e):        # personal (development-mode) apps can only read playlists you own
+                raise RuntimeError("Spotify only lets LyricsBar read playlists you made, not ones you follow")
+            raise
+        for it in r.get("items", []):
+            it = it or {}
+            u = ((it.get("item") or it.get("track")) or {}).get("uri", "")
+            if SPOTIFY_URI.match(u):
+                uris.append(u)
+        nxt = r.get("next") or ""
+        url = nxt[len("https://api.spotify.com/v1"):] if nxt.startswith("https://api.spotify.com/v1/") else None
+    uris = uris[:100]
+    for u in uris:
+        spotify_api("POST", f"/me/player/queue?uri={urllib.parse.quote(u, safe='')}&device_id={dev}")
+        time.sleep(0.05)
+    return {"queued": len(uris)}
 
 
 def spotify_replace(uris):
@@ -315,6 +352,8 @@ def main(argv):
             res = applemusic_playlists()
         elif cmd == "queue" and argv[2] == "spotify":
             res = spotify_queue()
+        elif cmd == "spotify-queue-playlist":
+            res = spotify_queue_playlist(argv[2])
         elif cmd == "spotify-jump":
             res = spotify_jump(argv[2], argv[3])
         elif cmd == "spotify-replace":

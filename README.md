@@ -70,7 +70,7 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 | Tap the album art | Show / hide the media controls, or the playlist picker when nothing is playing |
 | Hold the album art | Open / close Settings |
 | Tap 📚 | Open / close the Library window |
-| Hold a playlist in the picker | Queue it next instead of playing it |
+| Hold a playlist in the picker | Queue it next instead of playing it. For Spotify this works on playlists you made (up to 100 songs); Spotify doesn't let personal apps read playlists you only follow |
 | In Up Next, hold and drag a song | Reorder it, or drop it on the trash to remove it |
 
 Everything else is in **Settings** (Library window sidebar, or ⌘,):

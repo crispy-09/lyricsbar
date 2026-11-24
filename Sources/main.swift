@@ -1662,7 +1662,8 @@ final class BarView: NSView {
         let pins = cfg.pinned.filter { providerEnabled($0.provider) }
         if !pins.isEmpty { items.append(.init(title: "|", dim: true, action: nil)) }   // providers | pinned
         for p in pins {
-            let hold: (() -> Void)? = p.provider == "subsonic" ? { [weak self] in self?.queuePlaylistNext(p.playlistId, p.name) } : nil
+            let hold: (() -> Void)? = p.provider == "subsonic" ? { [weak self] in self?.queuePlaylistNext(p.playlistId, p.name) }
+                : p.provider == "spotify" ? { [weak self] in self?.queueSpotifyPlaylist(p.playlistId, p.name) } : nil
             items.append(.init(title: p.name, hold: hold) { [weak self] in self?.playPlaylist(p.provider, p.playlistId, p.name) })
         }
         picker.items = items
@@ -1696,7 +1697,8 @@ final class BarView: NSView {
                     })
                 }
                 for p in list {
-                    let hold: (() -> Void)? = provider == "subsonic" ? { [weak self] in self?.queuePlaylistNext(p.id, p.name) } : nil
+                    let hold: (() -> Void)? = provider == "subsonic" ? { [weak self] in self?.queuePlaylistNext(p.id, p.name) }
+                        : provider == "spotify" ? { [weak self] in self?.queueSpotifyPlaylist(p.id, p.name) } : nil
                     items.append(.init(title: p.name, hold: hold) { [weak self] in self?.playPlaylist(provider, p.id, p.name) })
                 }
                 self.picker.items = items
@@ -1780,6 +1782,23 @@ final class BarView: NSView {
                 queueNext(songs)
                 self.toast(playing ? "Up next: \(name)" : "Playing \(name)", seconds: 2)
             } catch { self.toast("Couldn't load \(name)", seconds: 2) }
+        }
+    }
+
+    /// Hold on a Spotify playlist: add its songs to the end of Spotify's queue (Spotify only queues one song
+    /// per request and has no "play next", so they go after anything already queued).
+    func queueSpotifyPlaylist(_ id: String, _ name: String) {
+        closePicker()
+        guard bundleId == "com.spotify.client" else { toast("Play something in Spotify first", seconds: 2.5); return }
+        toast("Queuing \(name)…", seconds: 6)
+        libraryJSON(["spotify-queue-playlist", spotifySafe(id)]) { [weak self] obj, err in
+            guard let self else { return }
+            if let n = (obj as? [String: Any])?["queued"] as? Int {
+                self.toast(n == 0 ? "\(name) is empty" : "Queued \(name) (\(n) songs)", seconds: 2.5)
+                SpotifyQueue.shared.refresh()
+            } else {
+                self.toast(SpotifyQueue.friendly(err), seconds: 4)
+            }
         }
     }
 
@@ -2154,6 +2173,22 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                        ConfigStore.shared.c.discordEnabled = true; ConfigStore.shared.c.discordAppId = "123456789012345678"
                                        ConfigStore.shared.c.discordWhenPaused = "show"
                                    }
+                               }
+                               if c.hasPrefix("spqpl") {                 // spqpl = list Spotify playlists; spqpl N = hold-queue #N
+                                   let arg = c.dropFirst(5).trimmingCharacters(in: .whitespacesAndNewlines)
+                                   Task { @MainActor in
+                                       guard case .success(let list) = await loadPlaylists("spotify") else { return }
+                                       if let i = Int(arg), list.indices.contains(i) {
+                                           libraryJSON(["spotify-queue-playlist", spotifySafe(list[i].id)]) { obj, err in
+                                               try? "queued \(list[i].name): \(String(describing: obj ?? err))"
+                                                   .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                           }
+                                       } else {
+                                           try? list.enumerated().map { "\($0.offset): \($0.element.name) (\($0.element.count))" }
+                                               .joined(separator: "\n").write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                       }
+                                   }
+                                   return
                                }
                                if c.hasPrefix("spq") {                    // Spotify queue: spq [skip N (= play entry N) | remove N | move A B]
                                    let q = SpotifyQueue.shared
