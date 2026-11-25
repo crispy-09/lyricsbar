@@ -1365,6 +1365,7 @@ final class BarView: NSView {
     var strip: Capsule!
     var panel: Capsule!
     var volBtn: PillButton!
+    var castBtn: PillButton!
     var panelIcon: PillButton!
     let panelSlider = ScrubBar()
 
@@ -1567,8 +1568,9 @@ final class BarView: NSView {
         siriBtn = PillButton(symbol("siri", 15), self, #selector(openSiri), width: 52)
         shotBtn = PillButton(symbol("camera.viewfinder", 14), self, #selector(openScreenshot), width: 52)
         regularBtn = PillButton(symbol("rectangle.badge.xmark", 14), self, #selector(regularBar), width: 52)
+        castBtn = PillButton(symbol("airplayaudio", 14), self, #selector(openCast), width: 52)
         moreBtn = PillButton(symbol("chevron.left", 13, .bold), self, #selector(toggleStripExpanded), width: 34)
-        strip = Capsule([moreBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
+        strip = Capsule([moreBtn, castBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
         for (btn, panel) in [(briBtn!, Panel.brightness), (volBtn!, .volume), (kbdBtn!, .keyboard)] {
             let o = SlideOverlay()
             fill(o, in: btn)
@@ -2483,6 +2485,58 @@ final class BarView: NSView {
         picker.items = items
     }
 
+    // MARK: cast (Spotify Connect)
+
+    /// The Cast button: the picker lists the Spotify Connect devices; a tap moves playback there. Only Spotify
+    /// can be moved from here: macOS has no way for an app to list AirPlay speakers or pick one.
+    @objc func openCast() {
+        guard cfg.showSpotify, bundleId == "com.spotify.client" || !StreamPlayer.shared.active else {
+            setStripExpanded(false)
+            toast("Cast works with Spotify. For other music, pick a speaker in the Mac's Sound menu", seconds: 4)
+            return
+        }
+        if !pickerMode || pickerParked { closePicker(); openPicker() }
+        showCastDevices()
+    }
+    func showCastDevices(note: String? = nil) {
+        pickerPage += 1; let page = pickerPage
+        showingUpNext = false
+        extras.isHidden = true
+        setPickerTransport(false)
+        useQueueStrip(false)
+        setBack { [weak self] in self?.closePicker() }
+        picker.items = [.init(title: note ?? "Looking for Spotify devices…", dim: true, action: nil)]
+        bumpPickerTimer()
+        libraryJSON(["spotify-devices"]) { [weak self] obj, err in
+            guard let self, self.pickerMode, self.pickerPage == page else { return }
+            guard let list = obj as? [[String: Any]] else {
+                self.picker.items = [.init(title: self.castError(err), dim: true, action: nil)]
+                return
+            }
+            if list.isEmpty {
+                self.picker.items = [.init(title: "No Spotify devices found. Open Spotify on one first", dim: true, action: nil)]
+                return
+            }
+            self.picker.items = list.compactMap { d in
+                guard let id = d["id"] as? String, let name = d["name"] as? String else { return nil }
+                let on = d["active"] as? Bool ?? false
+                return .init(title: (on ? "✓ " : "") + name, action: on ? nil : { [weak self] in self?.castTo(id, name) })
+            }
+        }
+    }
+    func castError(_ err: String?) -> String {
+        let e = err ?? ""
+        if e.contains("scope") || e.contains("401") || e.lowercased().contains("reconnect") { return "Reconnect Spotify in Settings → Providers" }
+        return e.isEmpty || e == "No response" ? "Couldn't reach Spotify" : e
+    }
+    func castTo(_ id: String, _ name: String) {
+        closePicker()
+        toast("Moving to \(name)…", seconds: 6)
+        libraryJSON(["spotify-transfer", id]) { [weak self] _, err in
+            self?.toast(err.map { self?.castError($0) ?? $0 } ?? "Playing on \(name)", seconds: err == nil ? 2 : 4)
+        }
+    }
+
     /// Bumped whenever the picker shows a different page, so a slow load can't overwrite a newer page.
     var pickerPage = 0
     func showPlaylists(_ provider: String) {
@@ -2806,7 +2860,7 @@ final class BarView: NSView {
     /// Extras show only while expanded (‹ / ›); they fold away again after a few seconds.
     var stripButtons: [String: NSView] {
         ["brightness": briBtn, "volume": volBtn, "library": appsBtn, "keyboard": kbdBtn, "siri": siriBtn,
-         "screenshot": shotBtn, "regular": regularBtn]
+         "screenshot": shotBtn, "regular": regularBtn, "cast": castBtn]
     }
     /// Lays the buttons out in the user's order; "Behind ‹" ones only show while expanded.
     func applyStripButtons() {
@@ -3171,6 +3225,26 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                            try? list.enumerated().map { "\($0.offset): \($0.element.name) (\($0.element.count))" }
                                                .joined(separator: "\n").write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
                                        }
+                                   }
+                                   return
+                               }
+                               if c.hasPrefix("cast") {                   // opens the Cast list; writes what it shows after 4 s
+                                   if c.contains("self") {                // "cast self": move playback to the device it's already on
+                                       libraryJSON(["spotify-devices"]) { obj, err in
+                                           guard let id = (obj as? [[String: Any]])?.first(where: { $0["active"] as? Bool == true })?["id"] as? String else {
+                                               try? "no active device: \(err ?? "-")".write(toFile: home + "/debug.out", atomically: true, encoding: .utf8); return
+                                           }
+                                           libraryJSON(["spotify-transfer", id]) { _, err in
+                                               try? "transfer: \(err ?? "ok")".write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                           }
+                                       }
+                                       return
+                                   }
+                                   self.view.openCast()
+                                   DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                                       let lines = self.view.picker.items.map { ($0.action == nil ? "- " : "> ") + $0.title }
+                                       try? (["picker: \(self.view.pickerMode)"] + lines).joined(separator: "\n")
+                                           .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
                                    }
                                    return
                                }

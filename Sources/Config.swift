@@ -185,22 +185,23 @@ struct StripSlot: Codable, Equatable, Identifiable {
 
     static let names: [String: String] = ["brightness": "Brightness", "volume": "Volume", "library": "Library",
                                           "keyboard": "Keyboard brightness", "siri": "Siri", "screenshot": "Screenshot",
-                                          "regular": "Switch to the regular Touch Bar"]
+                                          "regular": "Switch to the regular Touch Bar", "cast": "Cast (Spotify Connect)"]
     static let icons: [String: String] = ["brightness": "sun.max.fill", "volume": "speaker.wave.2.fill",
                                           "library": "books.vertical.fill", "keyboard": "light.max", "siri": "siri",
-                                          "screenshot": "camera.viewfinder", "regular": "rectangle.badge.xmark"]
-    static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular"]
+                                          "screenshot": "camera.viewfinder", "regular": "rectangle.badge.xmark",
+                                          "cast": "airplayaudio"]
+    static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular", "cast"]
     static let defaults: [StripSlot] = order.map {
-        StripSlot(id: $0, place: ["brightness", "volume", "library"].contains($0) ? "bar" : "off")
+        StripSlot(id: $0, place: ["brightness", "volume", "library"].contains($0) ? "bar" : $0 == "cast" ? "more" : "off")
     }
 
-    /// Known buttons only, each once, missing ones appended (off).
+    /// Known buttons only, each once, missing ones appended (off; Cast, added later, goes behind ‹).
     static func normalized(_ l: [StripSlot]) -> [StripSlot] {
         var seen = Set<String>(), out: [StripSlot] = []
         for s in l where names[s.id] != nil && !seen.contains(s.id) && ["bar", "more", "off"].contains(s.place) {
             seen.insert(s.id); out.append(s)
         }
-        for id in order where !seen.contains(id) { out.append(StripSlot(id: id, place: "off")) }
+        for id in order where !seen.contains(id) { out.append(StripSlot(id: id, place: id == "cast" ? "more" : "off")) }
         return out
     }
 }

@@ -154,7 +154,7 @@ def spotify_api(method, path, body=None, _retried=False):
         if e.code in (401, 403) and "scope" in msg.lower():
             raise RuntimeError("Spotify needs new permissions: reconnect it in Settings → Providers (scope)")
         if e.code == 403 and path.startswith("/me/player"):
-            raise RuntimeError("Spotify only allows queue changes with Premium" + (f" ({msg})" if msg else ""))
+            raise RuntimeError("Spotify only allows this with Premium" + (f" ({msg})" if msg else ""))
         if e.code == 403:
             raise RuntimeError("Spotify won't let this app read that" + (f" ({msg})" if msg else ""))
         if e.code == 404 and path.startswith("/me/player"):
@@ -177,6 +177,21 @@ def _track(t):
 def spotify_queue():
     r = spotify_api("GET", "/me/player/queue") or {}
     return [_track(t) for t in r.get("queue", []) if t]
+
+
+def spotify_devices():
+    """Spotify Connect devices this account can play on right now."""
+    r = spotify_api("GET", "/me/player/devices") or {}
+    return [{"id": d["id"], "name": d.get("name") or "?", "type": d.get("type") or "", "active": bool(d.get("is_active"))}
+            for d in r.get("devices", []) if d.get("id") and not d.get("is_restricted")]
+
+
+def spotify_transfer(device):
+    """Move playback to a device, keeping it playing or paused as it was."""
+    if not re.match(r"^[A-Za-z0-9_-]{8,128}$", device):
+        raise RuntimeError("Not a Spotify device")
+    spotify_api("PUT", "/me/player", {"device_ids": [device]})
+    return {"ok": True}
 
 
 def spotify_jump(uri, hint):
@@ -528,6 +543,10 @@ def main(argv):
             res = spotify_queue()
         elif cmd == "spotify-queue-playlist":
             res = spotify_queue_playlist(argv[2])
+        elif cmd == "spotify-devices":
+            res = spotify_devices()
+        elif cmd == "spotify-transfer":
+            res = spotify_transfer(argv[2])
         elif cmd == "spotify-jump":
             res = spotify_jump(argv[2], argv[3])
         elif cmd == "spotify-feed":
