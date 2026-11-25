@@ -91,9 +91,7 @@ Playlists are managed in the Library's **Playlists** section. Pinned playlists a
 - **Spotify**: create an app at developer.spotify.com with the redirect URI `http://127.0.0.1:8898/callback`, then paste its Client ID under Providers → Spotify. Playback happens in the Spotify app.
   - Up Next is editable on the Touch Bar and in the Library (needs Premium). See the quirks below.
   - Hold a playlist in the picker to queue it (up to 100 songs). This works for playlists you made, not ones you only follow.
-  - **Cast** (the AirPlay-style button behind ‹, placed under Appearance → buttons) lists your Spotify Connect devices; tap one to move playback there (needs Premium). Spotify only lists devices it currently sees for your account, so open Spotify on a device if it's missing. Editing Up Next is only followed while the Mac's Spotify app is the one playing.
-  - Cast is Spotify only. macOS doesn't let an app list AirPlay speakers or pick one, so for the built-in player choose a speaker in the Mac's Sound menu.
-  - If you connected Spotify before these features existed, reconnect it once to grant playback control.
+  - **Cast** (the AirPlay-style button behind ‹, placed under Appearance → buttons) lists your Spotify Connect devices; tap one to move playback there (needs Premium). Spotify's API only lists your phone, computers and speakers you've used before, not every speaker the Spotify app finds on your network; play to a new speaker from the Spotify app once and it shows up. Editing Up Next is only followed while the Mac's Spotify app is the one playing.
 
 #### Spotify queue quirks
 
@@ -113,6 +111,7 @@ Spotify's Web API can only read the queue and add to it. It has no way to remove
 - **Not tested:** Spotify's own crossfade setting. With it on, the hand-over may come too late for a clean change.
 - **The queue Spotify reports can lag.** Up Next on the bar reloads when the song changes and every few seconds, but Spotify sometimes takes a moment to catch up.
 
+- **Cast with the built-in player**: the same Cast button opens Apple's AirPlay menu on screen, at the mouse pointer (macOS doesn't let an app list AirPlay speakers, and a menu can't open on the Touch Bar). Only LyricsBar's music goes to the speaker you pick, not the rest of the Mac's sound.
 - **Apple Music**: uses the Music app through AppleScript.
 
 ### Scrobbling

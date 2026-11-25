@@ -476,7 +476,7 @@ final class StreamPlayer: NSObject, ObservableObject {
             })
         }
         let m = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.checkCrossfade(); self?.trackListening(); self?.ensurePreload()
+            self?.checkCrossfade(); self?.trackListening(); self?.ensurePreload(); self?.shareRoute()
         }
         RunLoop.main.add(m, forMode: .common)
         monitor = m
@@ -535,6 +535,15 @@ final class StreamPlayer: NSObject, ObservableObject {
 
     /// Keeps the idle player holding whatever follows the current song. Called from the monitor timer, so it
     /// follows queue edits, shuffle and repeat changes by itself.
+    /// AirPlay is chosen per player (AirPlayMenu sets it on the current one): keep the second player, which the
+    /// next song fades in on, on the same route. Not public API, so only if this macOS still has it.
+    private func shareRoute() {
+        let get = NSSelectorFromString("outputContext"), set = NSSelectorFromString("setOutputContext:")
+        guard cur.responds(to: get), other.responds(to: get), other.responds(to: set) else { return }
+        let a = cur.perform(get)?.takeUnretainedValue(), b = other.perform(get)?.takeUnretainedValue()
+        if a !== b { _ = other.perform(set, with: a) }
+    }
+
     private func ensurePreload() {
         guard active, isPlaying, fade == nil, let n = followingIndex, n != index, tracks.indices.contains(n),
               cur.currentItem?.isPlaybackLikelyToKeepUp == true          // the current song gets the network first
@@ -2487,12 +2496,14 @@ final class BarView: NSView {
 
     // MARK: cast (Spotify Connect)
 
-    /// The Cast button: the picker lists the Spotify Connect devices; a tap moves playback there. Only Spotify
-    /// can be moved from here: macOS has no way for an app to list AirPlay speakers or pick one.
+    /// The Cast button. Spotify: the picker lists its Connect devices; a tap moves playback there. LyricsBar's
+    /// own player: Apple's AirPlay menu opens on screen (macOS can't list AirPlay speakers for an app).
     @objc func openCast() {
-        guard cfg.showSpotify, bundleId == "com.spotify.client" || !StreamPlayer.shared.active else {
+        let own = StreamPlayer.shared.active && bundleId != "com.spotify.client"
+        if own || !cfg.showSpotify {
             setStripExpanded(false)
-            toast("Cast works with Spotify. For other music, pick a speaker in the Mac's Sound menu", seconds: 4)
+            if own, AirPlayMenu.shared.show() { toast("Pick a speaker on screen", seconds: 2.5) }
+            else { toast("Cast works with Spotify and LyricsBar's own player", seconds: 3) }
             return
         }
         if !pickerMode || pickerParked { closePicker(); openPicker() }
