@@ -1617,13 +1617,16 @@ final class BarView: NSView {
     private let swipeMask = CALayer()                  // keeps the dragged text off the cover and buttons
 
     /// Clips the moving lyric to the swipe area; `tx` is the lyric's current offset.
-    private func placeSwipeMask(_ tx: CGFloat) {
+    /// `cut`: the preview's edge on the bar; the current text is hidden beyond it (the preview slides over it).
+    private func placeSwipeMask(_ tx: CGFloat, cut: (x: CGFloat, keepLeft: Bool)? = nil) {
         guard let layer = lyric.layer else { return }
+        var lo = swipeClip.frame.minX, hi = swipeClip.frame.maxX
+        if let c = cut { if c.keepLeft { hi = min(hi, c.x) } else { lo = max(lo, c.x) } }
         CATransaction.begin(); CATransaction.setDisableActions(true)
         swipeMask.backgroundColor = NSColor.black.cgColor
         swipeMask.anchorPoint = .zero
-        swipeMask.bounds = CGRect(x: 0, y: 0, width: swipeClip.frame.width, height: max(layer.bounds.height, 40))
-        swipeMask.position = CGPoint(x: swipeClip.frame.minX - (lyric.frame.minX + tx), y: -10)
+        swipeMask.bounds = CGRect(x: 0, y: 0, width: max(0, hi - lo), height: max(layer.bounds.height, 40))
+        swipeMask.position = CGPoint(x: lo - (lyric.frame.minX + tx), y: -10)
         if layer.mask !== swipeMask { layer.mask = swipeMask }
         CATransaction.commit()
     }
@@ -1701,37 +1704,25 @@ final class BarView: NSView {
             lyric.alphaValue = 1 - min(0.6, abs(dx) / 300)
             swipePreview.isHidden = true; swipeGeo = nil; swipeTarget = nil; return
         }
-        let curLeft = lyric.frame.minX + (textStartX(lyric.attributedStringValue) ?? 2)
-        let curRight = min(curLeft + ceil(lyric.attributedStringValue.size().width), lyric.frame.maxX)
-        func geo(_ t: SwipeTarget) -> (w: CGFloat, start: CGFloat, rest: CGFloat) {
+        func geo(_ t: SwipeTarget) -> (w: CGFloat, rest: CGFloat) {
             let w = ceil(swipeText(t).size().width) + 4
-            let rest = lyricCentered ? lyric.frame.midX - w / 2 : lyric.frame.minX
-            return (w, toNext ? curRight + 48 : curLeft - 48 - w, rest)
+            return (w, lyricCentered ? lyric.frame.midX - w / 2 : lyric.frame.minX)
         }
-        let g = geo(first)
-        let reach = g.rest - g.start                    // how far the preview travels to its place
-        // the same drag lands it however long the titles are; past that it holds (with a little give),
-        // and for ↶ pulling a further `swipeHitch` brings the previous song
-        let d = Self.swipeLand * (toNext ? -1 : 1)
-        let past = toNext ? dx < d : dx > d
-        let eff = past ? reach + (dx - d) * 0.15 : dx * (reach / d)
+        // everything follows the finger 1:1. The preview starts a fixed `swipeLand` from its place, so the same
+        // drag lands it however long the titles are; the current text fades out over that distance.
+        // Past it the preview holds (with a little give); for ↶, a further `swipeHitch` brings the previous song.
+        let reach = Self.swipeLand * (toNext ? -1 : 1)
+        let past = toNext ? dx < reach : dx > reach
+        let eff = past ? reach + (dx - reach) * 0.15 : dx
         var target = first
-        if first == .restart, swipeRestartable, let p = swipePrevSong, dx > d + Self.swipeHitch { target = p }
+        if first == .restart, swipeRestartable, let p = swipePrevSong, dx > reach + Self.swipeHitch { target = p }
         swipeTarget = target
-        let tg = target == first ? g : geo(target)
-        // the current text keeps clear of a wider preview (the previous song's title replacing ↶)
-        let extra = toNext ? 0 : max(0, (tg.rest + (eff - reach) + tg.w + 48) - (curLeft + eff))
-        if extra != swipeExtra, let layer = lyric.layer {
-            let m = CABasicAnimation(keyPath: "transform.translation.x")
-            m.fromValue = eff + swipeExtra; m.toValue = eff + extra; m.duration = 0.22
-            m.timingFunction = .init(name: .easeOut)
-            layer.add(m, forKey: "makeRoom")
-            swipeExtra = extra
-        }
-        let tx = eff + swipeExtra
-        lyric.layer?.setAffineTransform(CGAffineTransform(translationX: tx, y: 0))
-        placeSwipeMask(tx)
-        lyric.alphaValue = 1 - min(0.6, abs(tx) / 300)
+        let tg = geo(target)
+        swipeExtra = 0
+        lyric.layer?.setAffineTransform(CGAffineTransform(translationX: eff, y: 0))
+        let px = tg.rest - reach + eff                      // the preview's left edge on the bar
+        placeSwipeMask(eff, cut: toNext ? (px - 14, true) : (px + tg.w + 14, false))
+        lyric.alphaValue = max(0, 1 - abs(eff) / Self.swipeLand)
         let a = swipeText(target)
         if swipeShown != target {
             if let shown = swipeShown, shown != target {
@@ -1744,7 +1735,7 @@ final class BarView: NSView {
             swipePreview.attributedStringValue = a
             swipeShown = target
         }
-        swipeGeo = (tg.rest - reach, tg.rest)             // landing moves the lyric by `reach` either way
+        swipeGeo = (tg.rest - reach, tg.rest)             // landing moves everything by what's left of `reach`
         swipePreview.frame = NSRect(x: tg.rest + (eff - reach) - swipeClip.frame.minX, y: lyric.frame.minY,
                                     width: tg.w, height: lyric.frame.height)
         swipePreview.alphaValue = min(1, abs(dx) / 60)
@@ -1757,7 +1748,7 @@ final class BarView: NSView {
         let toNext = dx < 0
         guard abs(dx) > 60, let target = swipeTarget, let g = swipeGeo, !swipePreview.isHidden else {
             // brought back to the middle: stay on this song
-            moveLyric(to: 0, alpha: 1)
+            moveLyric(to: 0, alpha: 1, follow: swipePreview.isHidden)
             if let g = swipeGeo { movePreview(to: g.start, alpha: 0) } else { swipeClip.isHidden = true }
             return
         }
@@ -1768,7 +1759,7 @@ final class BarView: NSView {
         lyricKey = "\u{1}card"
         titleCardUntil = Date().addingTimeInterval(max(cfg.titleCardSeconds, 2))
         let landed = swipeText(target)
-        moveLyric(to: travel, alpha: 0) { [weak self] in
+        moveLyric(to: travel, alpha: 0, follow: false) { [weak self] in
             guard let self else { return }
             CATransaction.begin(); CATransaction.setDisableActions(true)
             self.lyric.layer?.removeAnimation(forKey: "swipe")
@@ -1803,7 +1794,8 @@ final class BarView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { transport(.previous) }
     }
 
-    private func moveLyric(to x: CGFloat, alpha: CGFloat, done: (() -> Void)? = nil) {
+    /// `follow`: keep the clip fixed on the bar (no preview); otherwise it moves with the text, like the preview does.
+    private func moveLyric(to x: CGFloat, alpha: CGFloat, follow: Bool = true, done: (() -> Void)? = nil) {
         guard let layer = lyric.layer else { done?(); return }
         let from = layer.affineTransform().tx
         // timed rather than a CATransaction completion: AppKit can end the layer animation early
@@ -1815,7 +1807,7 @@ final class BarView: NSView {
         m.timingFunction = .init(name: .easeOut)
         layer.setAffineTransform(CGAffineTransform(translationX: x, y: 0))
         layer.add(m, forKey: "swipe")
-        if layer.mask === swipeMask {
+        if layer.mask === swipeMask && follow {
             let mx = swipeClip.frame.minX - lyric.frame.minX
             let k = CABasicAnimation(keyPath: "position.x")
             k.fromValue = mx - from; k.toValue = mx - x; k.duration = 0.3
