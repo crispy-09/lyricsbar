@@ -2901,6 +2901,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             guard let self else { return }
             self.view.applyConfig()
             self.updateStatusItem()
+            self.updateBackgroundMode()            // switching to album art: use the cover right away
             self.refreshWallpaperNow()
         }
         // test hooks: kill -USR1 = toggle media view, kill -USR2 = volume panel
@@ -3177,6 +3178,9 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         DispatchQueue.global(qos: .utility).async {
             let img = blurredStrip(from: url)
             DispatchQueue.main.async {
+                // a newer background was asked for meanwhile (e.g. the wallpaper's slower blur finishing after
+                // the album art's): don't let this one land on top of it
+                guard self.wallpaperKey == key else { return }
                 let t = CATransition(); t.type = .fade; t.duration = 0.6
                 self.view.bg.layer?.add(t, forKey: "bg")
                 self.view.bg.image = img
