@@ -959,7 +959,7 @@ final class LyricsModel: ObservableObject {
     }
     deinit { timer?.invalidate() }
 
-    var position: Double { state.elapsed + (Date().timeIntervalSince1970 - state.anchor) * state.rate + cfg.lyricOffset }
+    var position: Double { state.elapsed + (Date().timeIntervalSince1970 - state.anchor) * state.rate + cfg.lyricOffset - AudioOutput.lyricDelay }
 
     func poll() {
         guard let d = FileManager.default.contents(atPath: home + "/state.json"),
@@ -1016,7 +1016,7 @@ struct LyricsView: View {
                                     .scaleEffect(i == m.current ? 1.0 : 0.97, anchor: .leading)
                                     .animation(.easeOut(duration: 0.25), value: m.current)
                                     .id(i)
-                                    .onTapGesture { transport(.seek(max(0, l.t - cfg.lyricOffset))) }
+                                    .onTapGesture { transport(.seek(max(0, l.t - cfg.lyricOffset + AudioOutput.lyricDelay))) }
                                     .help("Jump here")
                             }
                         }

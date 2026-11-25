@@ -4,6 +4,7 @@
 
 import AVKit
 import ApplicationServices
+import CoreAudio
 
 final class AirPlayMenu: NSObject, AVRoutePickerViewDelegate {
     static let shared = AirPlayMenu()
@@ -109,6 +110,37 @@ enum ControlCenterSound {
                 }
             }
             finish(true)                                        // Control Center is open; its Sound row is one tap away
+        }
+    }
+}
+
+/// Is the music going to an AirPlay speaker? Those play about a second late and don't report the delay, so
+/// lyrics are held back by `airplayLyricDelay` while this is true. The lyrics daemon reads it from output.json.
+enum AudioOutput {
+    private(set) static var airplay = false
+    static var lyricDelay: Double { airplay ? max(0, ConfigStore.shared.c.airplayLyricDelay) : 0 }
+
+    /// The Mac's sound output is an AirPlay device (picked in Control Center or the Sound menu).
+    static var systemAirPlay: Bool {
+        var t: UInt32 = 0, size = UInt32(MemoryLayout<UInt32>.size)
+        var a = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType, mScope: kAudioObjectPropertyScopeGlobal,
+                                           mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(Sys.outputDevice, &a, 0, nil, &size, &t) == noErr else { return false }
+        return t == kAudioDeviceTransportTypeAirPlay
+    }
+    private static var timer: Timer?
+    static func watch() {
+        check(force: true)
+        // polled: covers the system output and a speaker picked for LyricsBar's own player alone (AirPlayMenu)
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in check(force: false) }
+    }
+    private static func check(force: Bool) {
+        let sp = StreamPlayer.shared
+        let now = systemAirPlay || (sp.isPlaying && sp.player.isExternalPlaybackActive)
+        guard force || now != airplay else { return }
+        airplay = now
+        if let d = try? JSONSerialization.data(withJSONObject: ["airplay": now]) {
+            try? d.write(to: URL(fileURLWithPath: home + "/output.json"), options: .atomic)
         }
     }
 }

@@ -125,6 +125,10 @@ struct LyricsSections: View {
                               format: { String(format: "%+.2fs", $0) })
                 Text("Positive shows each line earlier. Use it if lyrics feel late.")
                     .font(.caption).foregroundStyle(.secondary)
+                LabeledSlider(title: "Delay on AirPlay speakers", value: $store.c.airplayLyricDelay, range: 0...4, step: 0.05,
+                              format: { String(format: "%.2fs", $0) })
+                Text("AirPlay speakers play a little late. Lyrics wait this long while one is in use. Raise it if lyrics come before the words.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Title cards") {
                 LabeledSlider(title: "Song title card", value: $store.c.titleCardSeconds, range: 0...10, step: 0.5,

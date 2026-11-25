@@ -12,6 +12,7 @@ struct PinnedPlaylist: Codable, Hashable, Identifiable {
 struct Config: Codable, Equatable {
     // Lyrics
     var lyricOffset = 0.35            // seconds of look-ahead
+    var airplayLyricDelay = 1.0       // lyrics are held back this long while the sound goes to an AirPlay speaker
     var lyricFontSize = 15.0
     var showTitleWhenNoLyrics = true
     var titleCardSeconds = 3.0        // show "Title · Artist" when a song starts

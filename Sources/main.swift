@@ -3087,6 +3087,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         URLCache.shared = URLCache(memoryCapacity: 48 << 20, diskCapacity: 0)
         URLCache.shared.removeAllCachedResponses()
         signal(SIGPIPE, SIG_IGN)          // a helper that exits before reading stdin must not kill the app
+        AudioOutput.watch()
         // Spotify Up Next edits that were waiting for a song's end when LyricsBar quit (once Now Playing is known)
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { SpotifyQueue.shared.restore() }
         NotificationCenter.default.addObserver(forName: .lyricsBarToast, object: nil, queue: .main) { [weak self] n in

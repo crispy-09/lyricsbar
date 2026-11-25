@@ -296,6 +296,24 @@ def now_playing():
                   rate=c["rate"], position=c["position"] + (now - c["at"]) * c["rate"])
     return st
 
+OUTPUT = os.path.join(HOME, "output.json")
+_out = {"mtime": None, "airplay": False}
+
+def _airplay():
+    """LyricsBar writes output.json when the sound moves to or from an AirPlay speaker."""
+    try:
+        m = os.stat(OUTPUT).st_mtime
+    except OSError:
+        return False
+    if m != _out["mtime"]:
+        _out["mtime"] = m
+        try:
+            with open(OUTPUT) as f:
+                _out["airplay"] = bool(json.load(f).get("airplay"))
+        except (OSError, ValueError, AttributeError):
+            _out["airplay"] = False
+    return _out["airplay"]
+
 SEEK = os.path.join(HOME, "seek.json")
 
 def _apply_seek(seen):
@@ -375,6 +393,8 @@ def main():
                 text = f"♪ {state['track']} — {state['artist']}" if title else "♪"
             else:
                 pos = state["position"] + float(setting("lyricOffset", 0.35))
+                if _airplay():                   # AirPlay speakers play late and don't say by how much
+                    pos -= max(0.0, float(setting("airplayLyricDelay", 1.0)))
                 text = ""
                 for t, w in lines:
                     if t <= pos: text = w
