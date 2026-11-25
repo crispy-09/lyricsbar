@@ -3254,6 +3254,12 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                        try? "accessibility: \(ControlCenterSound.trusted)".write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
                                        return
                                    }
+                                   if c.contains("cc") {                  // "cast cc": Control Center's sound list, whatever is playing
+                                       ControlCenterSound.open { ok in
+                                           try? "control center: \(ok)".write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                       }
+                                       return
+                                   }
                                    if c.contains("self") {                // "cast self": move playback to the device it's already on
                                        libraryJSON(["spotify-devices"]) { obj, err in
                                            guard let id = (obj as? [[String: Any]])?.first(where: { $0["active"] as? Bool == true })?["id"] as? String else {

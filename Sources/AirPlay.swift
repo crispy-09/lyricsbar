@@ -87,7 +87,21 @@ enum ControlCenterSound {
                 return nil
             }
             if let sound = item("com.apple.menuextra.sound") { finish(press(sound)); return }
-            guard let cc = item("com.apple.menuextra.controlcenter"), press(cc) else { finish(false); return }
+            guard let cc = item("com.apple.menuextra.controlcenter") else { finish(false); return }
+            // already open: on Control Center's first page go on to the sound list. On the sound list a second
+            // press of Cast closes it: the menu bar item only steps back to the first page, so press it twice
+            let airplay = { windows("com.apple.controlcenter").lazy.compactMap { find(["controlcenter-airplay"], in: $0, depth: 5) }.first }
+            if !windows("com.apple.controlcenter").isEmpty {
+                if let b = airplay() { finish(press(b)); return }
+                _ = press(cc)
+                for _ in 0..<15 {
+                    Thread.sleep(forTimeInterval: 0.1)
+                    if windows("com.apple.controlcenter").isEmpty { finish(true); return }
+                    if airplay() != nil { finish(press(cc)); return }
+                }
+                finish(true); return
+            }
+            guard press(cc) else { finish(false); return }
             for _ in 0..<20 {                                   // Control Center takes a moment to draw
                 Thread.sleep(forTimeInterval: 0.1)
                 for w in windows("com.apple.controlcenter") {
