@@ -181,7 +181,8 @@ def _stream():
                     last_key = None
                     continue
                 paused = not p.get("playing")        # keep the song while paused so its lyric line stays up
-                key = (p.get("title"), p.get("artist"), p.get("elapsedTime"), p.get("timestamp"), paused)
+                # the rate matters too: buffering (0) → playing (1) at the same position must restart the clock
+                key = (p.get("title"), p.get("artist"), p.get("elapsedTime"), p.get("timestamp"), paused, p.get("playbackRate"))
                 if key == last_key:
                     continue
                 last_key = key
@@ -218,10 +219,34 @@ def now_playing():
         st["position"] += (time.time() - _np["anchor"]) * st["rate"]
         return st
 
+SEEK = os.path.join(HOME, "seek.json")
+
+def _apply_seek(seen):
+    """LyricsBar writes seek.json when it seeks; the Now Playing feed often stays quiet about seeks."""
+    try:
+        m = os.stat(SEEK).st_mtime
+    except OSError:
+        return seen
+    if m == seen:
+        return seen
+    try:
+        with open(SEEK) as f:
+            s = json.load(f)
+        pos, at = float(s["position"]), float(s["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return m
+    if time.time() - at < 3:
+        with _lock:
+            if _np["state"] and _np["anchor"] < at:
+                _np["state"]["position"], _np["anchor"] = pos, at
+    return m
+
 def main():
     threading.Thread(target=_stream, daemon=True).start()
     cur_key, lines, last_written, polled_at, as_state = None, None, None, 0, None
+    seek_seen = None
     while True:
+        seek_seen = _apply_seek(seek_seen)
         state = now_playing()
         if state is None:  # fallback: AppleScript (Spotify / Music)
             if time.time() - polled_at >= 1.0:

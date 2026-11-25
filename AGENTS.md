@@ -39,6 +39,7 @@ Notes for coding agents (and humans) working on LyricsBar.
   - fallback: a whole-system tap
 - `scripts/lyricsd.py`: the lyrics daemon.
   - It runs `media-control stream`, then writes `state.json`, `artwork.jpg` and `current.txt` (the current lyric line).
+  - The Now Playing feed often doesn't announce seeks, so the app writes `seek.json` (`noteSeek`) on every seek and lyricsd resets its clock from it.
   - It caches LRC in `cache/<md5(artist|title)>.json`.
 - `Resources/`: `Info.plist` (bump `CFBundleShortVersionString` for releases; `install.sh` prints old → new) and `AppIcon.icns`.
   - The icon is drawn in code by `Resources/icon/make_icon.swift`. Regenerate the `.icns` with `Resources/icon/make_icns.sh`.

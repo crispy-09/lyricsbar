@@ -861,7 +861,8 @@ final class StreamPlayer: NSObject, ObservableObject {
             MPMediaItemPropertyTitle: t.title, MPMediaItemPropertyArtist: t.artist,
             MPMediaItemPropertyAlbumTitle: t.album, MPMediaItemPropertyPlaybackDuration: t.duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: pos.isFinite ? pos : 0,
-            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0,
+            // 0 while (re)buffering after a seek or skip, so lyrics don't run ahead of the audio
+            MPNowPlayingInfoPropertyPlaybackRate: cur.timeControlStatus == .playing ? 1.0 : 0.0,
         ]
         if let a = artwork { info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: a.size) { _ in a } }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
@@ -959,9 +960,17 @@ func startDefaultPlayer() -> Bool {
 
 enum Transport { case toggle, next, previous, seek(Double) }
 
+/// Tells lyricsd about a seek right away: the system Now Playing feed often doesn't announce seeks,
+/// so lyrics would keep running from the old position until the next periodic update.
+func noteSeek(_ v: Double) {
+    let s = String(format: "{\"position\": %.3f, \"at\": %.3f}", v, Date().timeIntervalSince1970)
+    try? s.write(toFile: home + "/seek.json", atomically: true, encoding: .utf8)
+}
+
 /// Returns false only for a play with nothing loaded and the default set to "ask".
 @discardableResult
 func transport(_ t: Transport) -> Bool {
+    if case .seek(let v) = t { noteSeek(v) }
     let sp = StreamPlayer.shared
     if ownPlayerInCharge() {
         switch t {
@@ -1601,7 +1610,9 @@ final class BarView: NSView {
     var swipeSettling = false
     var peekNext: ((@escaping ((String, String)?) -> Void) -> Void)?   // App: the next song for any player
     private var swipeGeo: (start: CGFloat, rest: CGFloat)?
-    static let swipeFurther: CGFloat = 150             // pulling back past this skips to the previous song
+    static let swipeHitch: CGFloat = 90                // ↶ holds in place for this much pull before the previous song
+    private var swipeShown: SwipeTarget?
+    private var swipeExtra: CGFloat = 0                // extra push on the current text when a wider title takes ↶'s place
     private let swipeMask = CALayer()                  // keeps the dragged text off the cover and buttons
 
     /// Clips the moving lyric to the swipe area; `tx` is the lyric's current offset.
@@ -1621,6 +1632,8 @@ final class BarView: NSView {
         swipeClip.layer?.masksToBounds = true
         swipeClip.isHidden = true
         swipePreview.lineBreakMode = .byTruncatingTail
+        swipePreview.wantsLayer = true
+        swipePreview.layer?.masksToBounds = true
         swipeClip.addSubview(swipePreview)
         addSubview(swipeClip, positioned: .above, relativeTo: lyric)
     }
@@ -1657,6 +1670,7 @@ final class BarView: NSView {
         swipeClip.frame = NSRect(x: left, y: 0, width: max(0, right - 8 - left), height: bounds.height)
         swipeClip.isHidden = false
         swipePreview.isHidden = true
+        swipeShown = nil; swipeExtra = 0
         placeSwipeMask(0)
         let sp = StreamPlayer.shared, own = ownPlayerActive
         // past 3 s, previous restarts the song; pulling further goes to the song before
@@ -1678,28 +1692,58 @@ final class BarView: NSView {
 
     func updateSwipe(_ dx: CGFloat) {
         guard swipeDragging else { return }
-        lyric.layer?.setAffineTransform(CGAffineTransform(translationX: dx, y: 0))
-        placeSwipeMask(dx)
-        lyric.alphaValue = 1 - min(0.6, abs(dx) / 300)
         let toNext = dx < 0
-        let target: SwipeTarget?
-        if toNext { target = swipeNext }
-        else if swipeRestartable { target = dx > Self.swipeFurther && swipePrevSong != nil ? swipePrevSong : .restart }
-        else { target = swipePrevSong ?? .restart }
-        swipeTarget = target
-        guard let target else { swipePreview.isHidden = true; swipeGeo = nil; return }
-        let a = swipeText(target)
-        if swipePreview.attributedStringValue != a { swipePreview.attributedStringValue = a }
-        swipePreview.sizeToFit()
-        let w = swipePreview.frame.width
-        // where the new text will sit, and where it waits beside the current text
-        let rest = lyricCentered ? lyric.frame.midX - w / 2 : lyric.frame.minX
+        // what slides in first: the next song, ↶ when previous would restart this one, else the previous song
+        let first: SwipeTarget? = toNext ? swipeNext : (swipeRestartable ? .restart : (swipePrevSong ?? .restart))
+        guard let first else {
+            lyric.layer?.setAffineTransform(CGAffineTransform(translationX: dx, y: 0)); placeSwipeMask(dx)
+            lyric.alphaValue = 1 - min(0.6, abs(dx) / 300)
+            swipePreview.isHidden = true; swipeGeo = nil; swipeTarget = nil; return
+        }
         let curLeft = lyric.frame.minX + (textStartX(lyric.attributedStringValue) ?? 2)
         let curRight = min(curLeft + ceil(lyric.attributedStringValue.size().width), lyric.frame.maxX)
-        let start = toNext ? curRight + 48 : curLeft - 48 - w
-        swipeGeo = (start, rest)
-        swipePreview.frame.origin = NSPoint(x: start + dx - swipeClip.frame.minX, y: lyric.frame.minY)
-        swipePreview.frame.size.height = lyric.frame.height
+        func geo(_ t: SwipeTarget) -> (w: CGFloat, start: CGFloat, rest: CGFloat) {
+            let w = ceil(swipeText(t).size().width) + 4
+            let rest = lyricCentered ? lyric.frame.midX - w / 2 : lyric.frame.minX
+            return (w, toNext ? curRight + 48 : curLeft - 48 - w, rest)
+        }
+        let g = geo(first)
+        let reach = g.rest - g.start                    // drag that brings the preview to its place
+        // past that point it holds (with a little give); for ↶, pulling a further `swipeHitch` brings the previous song
+        let past = toNext ? dx < reach : dx > reach
+        let eff = past ? reach + (dx - reach) * 0.15 : dx
+        var target = first
+        if first == .restart, swipeRestartable, let p = swipePrevSong, dx > reach + Self.swipeHitch { target = p }
+        swipeTarget = target
+        let tg = target == first ? g : geo(target)
+        // the current text keeps clear of a wider preview (the previous song's title replacing ↶)
+        let extra = toNext ? 0 : max(0, (tg.rest + (eff - reach) + tg.w + 48) - (curLeft + eff))
+        if extra != swipeExtra, let layer = lyric.layer {
+            let m = CABasicAnimation(keyPath: "transform.translation.x")
+            m.fromValue = eff + swipeExtra; m.toValue = eff + extra; m.duration = 0.22
+            m.timingFunction = .init(name: .easeOut)
+            layer.add(m, forKey: "makeRoom")
+            swipeExtra = extra
+        }
+        let tx = eff + swipeExtra
+        lyric.layer?.setAffineTransform(CGAffineTransform(translationX: tx, y: 0))
+        placeSwipeMask(tx)
+        lyric.alphaValue = 1 - min(0.6, abs(tx) / 300)
+        let a = swipeText(target)
+        if swipeShown != target {
+            if let shown = swipeShown, shown != target {
+                // ↶ is pushed out by the previous song (and back again)
+                let t = CATransition(); t.type = .push; t.duration = 0.22
+                t.subtype = target == .restart ? .fromRight : .fromLeft
+                t.timingFunction = .init(name: .easeOut)
+                swipePreview.layer?.add(t, forKey: "swap")
+            }
+            swipePreview.attributedStringValue = a
+            swipeShown = target
+        }
+        swipeGeo = (tg.rest - reach, tg.rest)             // landing moves the lyric by `reach` either way
+        swipePreview.frame = NSRect(x: tg.rest + (eff - reach) - swipeClip.frame.minX, y: lyric.frame.minY,
+                                    width: tg.w, height: lyric.frame.height)
         swipePreview.alphaValue = min(1, abs(dx) / 60)
         swipePreview.isHidden = false
     }
@@ -1714,7 +1758,7 @@ final class BarView: NSView {
             if let g = swipeGeo { movePreview(to: g.start, alpha: 0) } else { swipeClip.isHidden = true }
             return
         }
-        let travel = g.rest - g.start                      // the preview lands where the title will be
+        let travel = g.rest - g.start + swipeExtra         // the preview lands where the title will be
         movePreview(to: g.rest, alpha: 1)
         // nothing else may write to the line while it slides out (lyrics, the song change's title card)
         swipeSettling = true
@@ -1743,7 +1787,7 @@ final class BarView: NSView {
         pendingSlide = nil
         if case .song(let title, _) = target { swipeLanded = (title, Date()) } else { swipeLanded = nil }
         if toNext { next() }
-        else if target == .restart { bumpMediaTimer(); transport(.seek(0)) }
+        else if target == .restart { bumpMediaTimer(); localSeek = (0, Date().timeIntervalSince1970); transport(.seek(0)) }
         else if swipeRestartable { skipToPreviousSong() }
         else { prev() }
     }
