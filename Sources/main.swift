@@ -1618,6 +1618,7 @@ final class BarView: NSView {
     private var swipeRestore: NSAttributedString?      // the line shown before the swipe put the title up
     private var swipeShown: SwipeTarget?
     static let swipeGap: CGFloat = 48                  // space between the current text and the incoming one
+    static let swipeIconGap: CGFloat = 30              // the same when the incoming one is ↶ / ⏮ / ⏭
     private let swipeMask = CALayer()                  // keeps the dragged text off the cover and buttons
 
     /// Clips the moving lyric to the swipe area; `tx` is the lyric's current offset.
@@ -1726,7 +1727,8 @@ final class BarView: NSView {
         // Everything follows the finger 1:1. The preview waits just past the end of the current text (a gap away)
         // and slides in with it; letting go past 60 pt lands it in place. Going back, ↶ moves `swipeLand`,
         // holds for `swipeHitch` (fading out), then the previous song comes in from where ↶ stood.
-        let gap = Self.swipeGap
+        var gap = Self.swipeGap
+        if case .song = first {} else { gap = Self.swipeIconGap }   // an icon sits closer than a title would
         let cur = lyric.attributedStringValue
         let curLeft = lyric.frame.minX + (textStartX(cur) ?? 2)
         let curW = textStartX(cur) != nil ? ceil(cur.size().width) : lyric.bounds.width - 4
