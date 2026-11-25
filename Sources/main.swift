@@ -1435,7 +1435,8 @@ final class BarView: NSView {
         strip.isHidden = panelMode != .none || !anyStripButton
         if !pickerMode { shuffle = cfg.defaultShuffle }
         applyVisualizer()
-        let k = lyricKey; lyricKey = "\u{1}"; if Date() >= titleCardUntil { setLyric(k) }   // re-render with new style
+        let k = lyricKey; lyricKey = "\u{1}"                 // re-render with new style
+        if Date() >= titleCardUntil && !k.hasPrefix("\u{1}") { setLyric(k) }
     }
 
     func applyVisualizer() {
@@ -1508,18 +1509,18 @@ final class BarView: NSView {
         }
         titleCardUntil = Date().addingTimeInterval(cfg.titleCardSeconds)
         lyricKey = "\u{1}card"
-        let a = NSMutableAttributedString(string: title, attributes: lyricAttrs(.white))
-        if !artist.isEmpty {
-            a.append(NSAttributedString(string: "   " + artist, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.6), .regular)))
-        }
+        let a = titleText(title, artist)
         lyric.alphaValue = 1
         var sub: CATransitionSubtype? = slideIn ? .fromRight : nil
         if let p = pendingSlide, Date().timeIntervalSince(p.1) < 4 { sub = p.0 }
         pendingSlide = nil
         // after the "NEXT" preview: that title glides from where it was into place, the rest fades away
-        if wasOutro, sub == .fromRight, let from = outroNextX, title == outroNextTitle, let to = textStartX(a) {
+        if wasOutro, sub == .fromRight, let from = outroNextX, title == outroNextTitle, !lyric.isHidden {
+            layoutSubtreeIfNeeded()
+            fadeOutSnapshot(upTo: from - lyric.frame.minX)   // the old title and NEXT fade where they are
             lyric.attributedStringValue = a
-            glideLyric(from: from - to)
+            layoutSubtreeIfNeeded()
+            glideLyric(from: from - (lyric.frame.minX + (textStartX(a) ?? 2)))
             return
         }
         if let sub {
@@ -1532,6 +1533,22 @@ final class BarView: NSView {
     }
 
     /// Near the end of a song: its title comes back, with the next song's title to the right.
+    func titleText(_ title: String, _ artist: String) -> NSMutableAttributedString {
+        let a = NSMutableAttributedString(string: title, attributes: lyricAttrs(.white))
+        if !artist.isEmpty {
+            a.append(NSAttributedString(string: "   " + artist, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.6), .regular)))
+        }
+        return a
+    }
+    /// A song without lyrics keeps the title card's "Title   Artist" (same key, so nothing re-animates).
+    func showTitleLine(_ title: String, _ artist: String) {
+        if Date() < titleCardUntil || pausedActive { return }
+        guard lyricKey != "\u{1}card" else { return }
+        lyricKey = "\u{1}card"
+        animateLyric()
+        lyric.attributedStringValue = titleText(title, artist)
+    }
+
     var outroNextTitle: String?, outroNextX: CGFloat?
     /// Where text starts inside the lyric label (nil if it doesn't fit, so it's truncated).
     func textStartX(_ a: NSAttributedString) -> CGFloat? {
@@ -1539,7 +1556,6 @@ final class BarView: NSView {
         guard w <= avail else { return nil }
         return lyricCentered ? (lyric.bounds.width - w) / 2 : 2
     }
-    /// Slides the label's new text in from `dx` points away while the previous text fades out.
     /// Switches the lyric between centred and left-aligned, sliding the text across instead of jumping.
     func slideLyricAlignment(left: Bool) {
         layoutSubtreeIfNeeded()
@@ -1557,10 +1573,31 @@ final class BarView: NSView {
         lyric.layer?.add(m, forKey: "align")
     }
 
+    /// Fades out a still copy of the label's left part (up to `x`), so the text after it can move on its own.
+    func fadeOutSnapshot(upTo x: CGFloat) {
+        guard x > 1, lyric.bounds.width > 0, let host = layer,
+              let rep = lyric.bitmapImageRepForCachingDisplay(in: lyric.bounds) else { return }
+        lyric.cacheDisplay(in: lyric.bounds, to: rep)
+        let w = min(x, lyric.bounds.width)
+        let snap = CALayer()
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        snap.contents = rep.cgImage
+        snap.contentsRect = CGRect(x: 0, y: 0, width: w / lyric.bounds.width, height: 1)
+        snap.frame = CGRect(x: lyric.frame.minX, y: lyric.frame.minY, width: w, height: lyric.frame.height)
+        snap.contentsScale = window?.backingScaleFactor ?? 2
+        host.addSublayer(snap)
+        CATransaction.commit()
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { snap.removeFromSuperlayer() }
+        let f = CABasicAnimation(keyPath: "opacity")
+        f.fromValue = 1; f.toValue = 0; f.duration = 0.25
+        snap.opacity = 0
+        snap.add(f, forKey: "fade")
+        CATransaction.commit()
+    }
+
+    /// Slides the label's text in from `dx` points away.
     func glideLyric(from dx: CGFloat) {
-        lyric.layer?.masksToBounds = true
-        let f = CATransition(); f.type = .fade; f.duration = 0.3
-        lyric.layer?.add(f, forKey: "lyric")
         let m = CABasicAnimation(keyPath: "transform.translation.x")
         m.fromValue = dx; m.toValue = 0; m.duration = 0.45
         m.timingFunction = .init(name: .easeInEaseOut)
@@ -1573,10 +1610,7 @@ final class BarView: NSView {
         outroNextTitle = nil; outroNextX = nil
         titleCardUntil = .distantFuture
         lyricKey = "\u{1}outro"
-        let a = NSMutableAttributedString(string: title, attributes: lyricAttrs(.white))
-        if !artist.isEmpty {
-            a.append(NSAttributedString(string: "   " + artist, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.6), .regular)))
-        }
+        let a = titleText(title, artist)
         var nextPrefix: CGFloat?
         if let n = next, !n.0.isEmpty {
             var small = lyricAttrs(NSColor.white.withAlphaComponent(0.45), .bold)
@@ -1590,23 +1624,64 @@ final class BarView: NSView {
                 a.append(NSAttributedString(string: "   " + n.1, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.45), .regular)))
             }
         }
-        if let n = next, let p = nextPrefix, let start = textStartX(a) {
+        // positions are measured on the bar: the label is only as wide as its text and moves when that changes
+        layoutSubtreeIfNeeded()
+        let oldX = lyric.frame.minX + (textStartX(before) ?? 2)
+        let sameTitle = before.string.hasPrefix(title) && !lyric.isHidden
+        let titleLen = titleText(title, artist).length
+        let tail = NSRange(location: titleLen, length: max(0, a.length - titleLen))
+        if sameTitle && tail.length > 0 {
+            let hidden = NSMutableAttributedString(attributedString: a)    // same layout, NEXT not drawn yet
+            hidden.addAttribute(.foregroundColor, value: NSColor.clear, range: tail)
+            lyric.attributedStringValue = hidden
+        } else { lyric.attributedStringValue = a }
+        layoutSubtreeIfNeeded()
+        let newX = lyric.frame.minX + (textStartX(a) ?? 2)
+        if let n = next, let p = nextPrefix {
             outroNextTitle = n.0
-            outroNextX = start + p                 // where the next song's title starts on screen
+            outroNextX = min(newX + p, lyric.frame.maxX)       // where the next title starts on the bar
         }
-        lyric.attributedStringValue = a
-        if before.string.hasPrefix(title), let old = textStartX(before), let new = textStartX(a) {
-            // the title was already showing: it slides over, and NEXT pushes in from the right
-            lyric.layer?.masksToBounds = true
-            let m = CABasicAnimation(keyPath: "transform.translation.x")
-            m.fromValue = old - new; m.toValue = 0; m.duration = 0.45
-            m.timingFunction = .init(name: .easeInEaseOut)
-            lyric.layer?.add(m, forKey: "glide")
-        } else {
+        guard sameTitle else {
+            lyric.layer?.masksToBounds = true          // the pushed text stays inside the line
             let t = CATransition(); t.type = .push; t.subtype = .fromRight; t.duration = 0.4
             t.timingFunction = .init(name: .easeInEaseOut)
             lyric.layer?.add(t, forKey: "lyric")
+            return
         }
+        // the title was already showing: the same text stays (sliding over if it was centred)
+        if abs(oldX - newX) > 1 {
+            let m = CABasicAnimation(keyPath: "transform.translation.x")
+            m.fromValue = oldX - newX; m.toValue = 0; m.duration = 0.45
+            m.timingFunction = .init(name: .easeInEaseOut)
+            lyric.layer?.add(m, forKey: "glide")
+        }
+        guard tail.length > 0 else { return }
+        // ...and NEXT slides in on its own label, then the line takes over with identical layout
+        let part = NSMutableAttributedString(attributedString: a.attributedSubstring(from: tail))
+        let ps = NSMutableParagraphStyle(); ps.alignment = .left; ps.lineBreakMode = .byTruncatingTail
+        part.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: part.length))
+        let x = newX + a.attributedSubstring(from: NSRange(location: 0, length: titleLen)).size().width
+        let overlay = NSTextField(labelWithAttributedString: part)
+        overlay.lineBreakMode = .byTruncatingTail
+        overlay.wantsLayer = true
+        // a clip the size of the line, so nothing slides over the buttons
+        let clip = NSView(frame: NSRect(x: lyric.frame.minX, y: lyric.frame.minY, width: lyric.frame.width + 2, height: lyric.frame.height))
+        clip.wantsLayer = true; clip.layer?.masksToBounds = true
+        let end = NSRect(x: x - clip.frame.minX, y: 0, width: max(0, lyric.frame.maxX - x + 2), height: lyric.frame.height)
+        overlay.frame = end.offsetBy(dx: (oldX - newX) + 40, dy: 0)   // keeps its distance from the sliding title
+        overlay.alphaValue = 0
+        clip.addSubview(overlay)
+        addSubview(clip, positioned: .above, relativeTo: lyric)
+        let key = lyricKey
+        NSAnimationContext.runAnimationGroup({ c in
+            c.duration = 0.45; c.timingFunction = .init(name: .easeInEaseOut)
+            overlay.animator().frame = end
+            overlay.animator().alphaValue = 1
+        }, completionHandler: { [weak self] in
+            clip.removeFromSuperview()
+            guard let self, self.lyricKey == key else { return }
+            self.lyric.attributedStringValue = a
+        })
     }
 
     func cancelOutro() {
@@ -2452,6 +2527,13 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    return
                                }
                                if w.first == "more" { self.view.toggleStripExpanded(); return }
+                               if w.first == "outro" {           // outro = show Up Next now with a sample next song
+                                   self.view.showOutro(self.lastTitle, self.lastArtist, next: ("Sample Song", "Sample Artist"))
+                                   let v = self.view, o = v.subviews.last
+                                   try? "lyric=\(v.lyric.frame) super=\(v.lyric.superview === v) overlay=\(o.map { "\($0.frame) \(type(of: $0))" } ?? "-")"
+                                       .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                   return
+                               }
                                if w.first == "kbd" {
                                    try? "keyboard light: available=\(KeyboardLight.available) level=\(KeyboardLight.level)"
                                        .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
@@ -2680,7 +2762,11 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         }
         useOwnPlayerFallback()
         if let s = try? String(contentsOfFile: home + "/current.txt", encoding: .utf8) {
-            view.setLyric(s.trimmingCharacters(in: .whitespacesAndNewlines))
+            let line = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            // no lyrics: lyricsd writes "♪ Title — Artist"; keep the title display instead
+            let noLyrics = "♪ \(lastTitle) — \(lastArtist)".trimmingCharacters(in: .whitespacesAndNewlines)
+            if !lastTitle.isEmpty && line == noLyrics { view.showTitleLine(lastTitle, lastArtist) }
+            else { view.setLyric(line) }
         }
         view.updateScrubber()
         let artPath = home + "/artwork.jpg"
