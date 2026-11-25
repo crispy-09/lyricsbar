@@ -60,8 +60,9 @@ func presentSystemModal(_ bar: NSTouchBar, trayId: String) {
 /// Takes LyricsBar's bar off the Touch Bar, so macOS shows the app's own bar and the Control Strip again.
 func dismissSystemModal(_ bar: NSTouchBar) {
     let cls: AnyClass = NSTouchBar.self
-    for name in ["dismissSystemModalTouchBar:", "dismissSystemModalFunctionBar:",
-                 "minimizeSystemModalTouchBar:", "minimizeSystemModalFunctionBar:"] {
+    // minimise (not dismiss): the bar folds into its ♪ in the Control Strip, which brings it back
+    for name in ["minimizeSystemModalTouchBar:", "minimizeSystemModalFunctionBar:",
+                 "dismissSystemModalTouchBar:", "dismissSystemModalFunctionBar:"] {
         let sel = NSSelectorFromString(name)
         if let m = class_getClassMethod(cls, sel) {
             typealias F = @convention(c) (AnyObject, Selector, NSTouchBar) -> Void
@@ -212,6 +213,24 @@ func coloredSymbol(_ name: String, _ size: CGFloat, _ color: NSColor) -> NSImage
     let img = symbol(name, size)?.withSymbolConfiguration(.init(paletteColors: [color]))
     img?.isTemplate = false
     return img
+}
+
+/// The ♪ that sits in the Control Strip while the regular Touch Bar shows: a square grey cell like
+/// the system's own buttons (a plain NSButton gets a rounded bezel there).
+final class ControlStripButton: NSButton {
+    convenience init(_ img: NSImage?, _ target: AnyObject, _ action: Selector) {
+        self.init(frame: .zero)
+        image = img
+        imagePosition = .imageOnly
+        isBordered = false
+        wantsLayer = true
+        layer?.backgroundColor = NSColor(srgbRed: 69 / 255, green: 69 / 255, blue: 71 / 255, alpha: 1).cgColor
+        layer?.cornerRadius = 0
+        self.target = target; self.action = action
+        translatesAutoresizingMaskIntoConstraints = false
+        widthAnchor.constraint(equalToConstant: 54).isActive = true
+        heightAnchor.constraint(equalToConstant: 30).isActive = true
+    }
 }
 
 final class PillButton: NSButton {
@@ -1056,7 +1075,8 @@ final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubb
         v.textField.font = font
         v.textField.textColor = items[i].dim ? NSColor.white.withAlphaComponent(0.55) : .white
         v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor.white.withAlphaComponent(items[i].action == nil ? 0 : 0.14).cgColor
+        let pill = cfg.buttonStyle == "pill"
+        v.layer?.backgroundColor = NSColor.white.withAlphaComponent(items[i].action == nil || !pill ? 0 : 0.14).cgColor
         v.layer?.cornerRadius = 8
         return v
     }
@@ -1132,10 +1152,14 @@ final class BarView: NSView {
     var pickerPlayBtn: PillButton!
     var briBtn: PillButton!, appsBtn: PillButton!
     var kbdBtn: PillButton!, siriBtn: PillButton!, shotBtn: PillButton!, regularBtn: PillButton!
+    var moreBtn: PillButton!
+    var stripExpanded = false
+    var stripTimer: Timer?
+    /// Keyboard light, Siri, Screenshot and regular-bar live behind the ‹ button so the bar stays roomy.
+    var forceLeft = false                    // the strip is expanded: lyrics move to the left edge
     var onRegularBar: (() -> Void)?
     var anyStripButton: Bool {
-        cfg.showBrightness || cfg.showVolume || cfg.showApps || (cfg.showKeyboardLight && KeyboardLight.available)
-            || cfg.showSiri || cfg.showScreenshot || cfg.showRegularBar
+        StripSlot.normalized(cfg.stripLayout).contains { $0.place != "off" && ($0.id != "keyboard" || KeyboardLight.available) }
     }
     var upNextReturnsToMedia = false
     let vizBG = VisualizerView(style: .background)
@@ -1308,7 +1332,8 @@ final class BarView: NSView {
         siriBtn = PillButton(symbol("siri", 15), self, #selector(openSiri), width: 52)
         shotBtn = PillButton(symbol("camera.viewfinder", 14), self, #selector(openScreenshot), width: 52)
         regularBtn = PillButton(symbol("rectangle.badge.xmark", 14), self, #selector(regularBar), width: 52)
-        strip = Capsule([briBtn, kbdBtn, volBtn, siriBtn, shotBtn, appsBtn, regularBtn], spacing: 10)
+        moreBtn = PillButton(symbol("chevron.left", 13, .bold), self, #selector(toggleStripExpanded), width: 34)
+        strip = Capsule([moreBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
         for (btn, panel) in [(briBtn!, Panel.brightness), (volBtn!, .volume), (kbdBtn!, .keyboard)] {
             let o = SlideOverlay()
             fill(o, in: btn)
@@ -1406,13 +1431,7 @@ final class BarView: NSView {
     func applyConfig() {
         lyric.font = .systemFont(ofSize: cfg.lyricFontSize, weight: .semibold)
         tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(cfg.dimAmount).cgColor
-        briBtn.isHidden = !cfg.showBrightness
-        volBtn.isHidden = !cfg.showVolume
-        appsBtn.isHidden = !cfg.showApps
-        kbdBtn.isHidden = !(cfg.showKeyboardLight && KeyboardLight.available)
-        siriBtn.isHidden = !cfg.showSiri
-        shotBtn.isHidden = !cfg.showScreenshot
-        regularBtn.isHidden = !cfg.showRegularBar
+        applyStripButtons()
         strip.isHidden = panelMode != .none || !anyStripButton
         if !pickerMode { shuffle = cfg.defaultShuffle }
         applyVisualizer()
@@ -1428,7 +1447,7 @@ final class BarView: NSView {
         vizCompact.alphaValue = 1
         lyricLeadArt.isActive = !compact
         lyricLeadViz.isActive = compact
-        let centered = cfg.lyricAlignment == "center"
+        let centered = cfg.lyricAlignment == "center" && !forceLeft
         lyricPinArt.isActive = !centered && !compact
         lyricPinViz.isActive = !centered && compact
         lyricCenter.isActive = centered
@@ -1448,9 +1467,20 @@ final class BarView: NSView {
         progress.frame = NSRect(x: 0, y: 0, width: bounds.width * f, height: 2)
     }
 
+    var lyricCentered: Bool { cfg.lyricAlignment == "center" && !forceLeft }
+    /// Re-aligns whatever the lyric line shows now (the strip expanded or folded).
+    func realignLyric() {
+        let a = NSMutableAttributedString(attributedString: lyric.attributedStringValue)
+        a.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: a.length)) { v, r, _ in
+            let p = ((v as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+            p.alignment = lyricCentered ? .center : .left
+            a.addAttribute(.paragraphStyle, value: p, range: r)
+        }
+        lyric.attributedStringValue = a
+    }
     func lyricAttrs(_ color: NSColor, _ weight: NSFont.Weight = .semibold) -> [NSAttributedString.Key: Any] {
         let p = NSMutableParagraphStyle()
-        p.alignment = cfg.lyricAlignment == "center" ? .center : .left
+        p.alignment = lyricCentered ? .center : .left
         p.lineBreakMode = .byTruncatingTail
         return [.font: NSFont.systemFont(ofSize: cfg.lyricFontSize, weight: weight), .foregroundColor: color, .paragraphStyle: p]
     }
@@ -1486,6 +1516,12 @@ final class BarView: NSView {
         var sub: CATransitionSubtype? = slideIn ? .fromRight : nil
         if let p = pendingSlide, Date().timeIntervalSince(p.1) < 4 { sub = p.0 }
         pendingSlide = nil
+        // after the "NEXT" preview: that title glides from where it was into place, the rest fades away
+        if wasOutro, sub == .fromRight, let from = outroNextX, title == outroNextTitle, let to = textStartX(a) {
+            lyric.attributedStringValue = a
+            glideLyric(from: from - to)
+            return
+        }
         if let sub {
             // the next title slides in (from the right, or from the left after swiping back)
             let t = CATransition(); t.type = .push; t.subtype = sub; t.duration = 0.4
@@ -1496,28 +1532,64 @@ final class BarView: NSView {
     }
 
     /// Near the end of a song: its title comes back, with the next song's title to the right.
+    var outroNextTitle: String?, outroNextX: CGFloat?
+    /// Where text starts inside the lyric label (nil if it doesn't fit, so it's truncated).
+    func textStartX(_ a: NSAttributedString) -> CGFloat? {
+        let w = ceil(a.size().width), avail = lyric.bounds.width - 4
+        guard w <= avail else { return nil }
+        return lyricCentered ? (lyric.bounds.width - w) / 2 : 2
+    }
+    /// Slides the label's new text in from `dx` points away while the previous text fades out.
+    func glideLyric(from dx: CGFloat) {
+        lyric.layer?.masksToBounds = true
+        let f = CATransition(); f.type = .fade; f.duration = 0.3
+        lyric.layer?.add(f, forKey: "lyric")
+        let m = CABasicAnimation(keyPath: "transform.translation.x")
+        m.fromValue = dx; m.toValue = 0; m.duration = 0.45
+        m.timingFunction = .init(name: .easeInEaseOut)
+        lyric.layer?.add(m, forKey: "glide")
+    }
+
     func showOutro(_ title: String, _ artist: String, next: (String, String)?) {
+        let before = lyric.attributedStringValue
         outroActive = true
+        outroNextTitle = nil; outroNextX = nil
         titleCardUntil = .distantFuture
         lyricKey = "\u{1}outro"
         let a = NSMutableAttributedString(string: title, attributes: lyricAttrs(.white))
         if !artist.isEmpty {
             a.append(NSAttributedString(string: "   " + artist, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.6), .regular)))
         }
+        var nextPrefix: CGFloat?
         if let n = next, !n.0.isEmpty {
             var small = lyricAttrs(NSColor.white.withAlphaComponent(0.45), .bold)
             small[.font] = NSFont.systemFont(ofSize: max(9, cfg.lyricFontSize - 5), weight: .bold)
             small[.kern] = 1.2
             small[.baselineOffset] = 1.5
             a.append(NSAttributedString(string: "        NEXT  ", attributes: small))
+            nextPrefix = a.size().width
             a.append(NSAttributedString(string: n.0, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.85))))
             if !n.1.isEmpty {
                 a.append(NSAttributedString(string: "   " + n.1, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.45), .regular)))
             }
         }
-        let t = CATransition(); t.type = .fade; t.duration = 0.35
-        lyric.layer?.add(t, forKey: "lyric")
+        if let n = next, let p = nextPrefix, let start = textStartX(a) {
+            outroNextTitle = n.0
+            outroNextX = start + p                 // where the next song's title starts on screen
+        }
         lyric.attributedStringValue = a
+        if before.string.hasPrefix(title), let old = textStartX(before), let new = textStartX(a) {
+            // the title was already showing: it slides over, and NEXT pushes in from the right
+            lyric.layer?.masksToBounds = true
+            let m = CABasicAnimation(keyPath: "transform.translation.x")
+            m.fromValue = old - new; m.toValue = 0; m.duration = 0.45
+            m.timingFunction = .init(name: .easeInEaseOut)
+            lyric.layer?.add(m, forKey: "glide")
+        } else {
+            let t = CATransition(); t.type = .push; t.subtype = .fromRight; t.duration = 0.4
+            t.timingFunction = .init(name: .easeInEaseOut)
+            lyric.layer?.add(t, forKey: "lyric")
+        }
     }
 
     func cancelOutro() {
@@ -1615,6 +1687,7 @@ final class BarView: NSView {
 
     func openPicker() {
         if mediaMode { setMediaMode(false) }
+        if stripExpanded { setStripExpanded(false, restore: false) }
         pickerMode = true
         shuffle = cfg.defaultShuffle
         showProviders()
@@ -1917,7 +1990,7 @@ final class BarView: NSView {
     }
 
     func setMediaMode(_ on: Bool) {
-        if on { closePicker() }
+        if on { closePicker(); if stripExpanded { setStripExpanded(false, restore: false) } }
         mediaMode = on
         if on { closePanel() }
         show(mediaView, on); show(lyric, !on)
@@ -2046,13 +2119,70 @@ final class BarView: NSView {
     }
 
     @objc func openApps() { LibraryWindow.shared.toggle() }
-    @objc func openKeyboardLight() { openPanel(.keyboard) }
-    @objc func openSiri() { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Siri.app")) }
+    @objc func openKeyboardLight() { setStripExpanded(false); openPanel(.keyboard) }
+    @objc func openSiri() {
+        setStripExpanded(false)
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Siri.app"))
+    }
     /// The screenshot toolbar (same as ⇧⌘5).
     @objc func openScreenshot() {
+        setStripExpanded(false)
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Screenshot.app"))
     }
-    @objc func regularBar() { onRegularBar?() }
+    @objc func regularBar() { setStripExpanded(false); onRegularBar?() }
+
+    /// Extras show only while expanded (‹ / ›); they fold away again after a few seconds.
+    var stripButtons: [String: NSView] {
+        ["brightness": briBtn, "volume": volBtn, "library": appsBtn, "keyboard": kbdBtn, "siri": siriBtn,
+         "screenshot": shotBtn, "regular": regularBtn]
+    }
+    /// Lays the buttons out in the user's order; "Behind ‹" ones only show while expanded.
+    func applyStripButtons() {
+        let layout = StripSlot.normalized(cfg.stripLayout)
+        let usable = { (s: StripSlot) in s.id != "keyboard" || KeyboardLight.available }
+        let extras = layout.contains { $0.place == "more" && usable($0) }
+        if !extras && stripExpanded { stripExpanded = false; forceLeft = false; applyVisualizer() }
+        let views = [moreBtn as NSView] + layout.compactMap { stripButtons[$0.id] }
+        if strip.stack.arrangedSubviews != views {
+            for v in views { strip.stack.removeArrangedSubview(v); v.removeFromSuperview(); strip.stack.addArrangedSubview(v) }
+        }
+        moreBtn.isHidden = !extras
+        moreBtn.image = symbol(stripExpanded ? "chevron.right" : "chevron.left", 13, .bold)
+        for s in layout {
+            stripButtons[s.id]?.isHidden = !usable(s) || !(s.place == "bar" || (s.place == "more" && stripExpanded))
+        }
+    }
+    @objc func toggleStripExpanded() { setStripExpanded(!stripExpanded) }
+    /// Expanding makes room: the media controls / picker step aside and the lyric (or title) moves to the left;
+    /// folding back restores what was there.
+    var restoreMediaAfterStrip = false
+    func setStripExpanded(_ on: Bool, restore: Bool = true) {
+        stripTimer?.invalidate()
+        if on {
+            if !stripExpanded {
+                restoreMediaAfterStrip = mediaMode
+                if mediaMode { setMediaMode(false) }
+                if pickerMode { closePicker() }
+            }
+            stripTimer = Timer.scheduledTimer(withTimeInterval: max(4, cfg.panelAutoHide), repeats: false) { [weak self] _ in
+                self?.setStripExpanded(false)
+            }
+        }
+        guard on != stripExpanded else { return }
+        stripExpanded = on
+        forceLeft = on
+        NSAnimationContext.runAnimationGroup { c in
+            c.duration = 0.25; c.allowsImplicitAnimation = true
+            applyStripButtons()
+            applyVisualizer()
+            realignLyric()
+            layoutSubtreeIfNeeded()
+        }
+        if !on {
+            if restore && restoreMediaAfterStrip && !mediaMode && !pickerMode { setMediaMode(true) }
+            restoreMediaAfterStrip = false
+        }
+    }
 
     /// "pause" = play/pause (shows the controls instead when nothing is loaded), "controls" = media controls, "none".
     func lyricGesture(_ action: String) {
@@ -2207,7 +2337,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         bar.defaultItemIdentifiers = [mainId]
 
         let tray = NSCustomTouchBarItem(identifier: trayId)
-        tray.view = NSButton(image: symbol("music.note", 14)!, target: self, action: #selector(showOnBar))
+        tray.view = ControlStripButton(coloredSymbol("music.note", 15, .white), self, #selector(showOnBar))
         view.onRegularBar = { [weak self] in self?.setBarHidden(true) }
         addSystemTrayItem(tray)
         dfrSetControlStripPresence(trayId.rawValue, true)
@@ -2268,10 +2398,12 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                if w.first == "playingshows", w.count == 2 { ConfigStore.shared.c.playingShows = w[1]; return }
                                if w.first == "buttons", w.count == 2 {
                                    let on = w[1] == "on"
-                                   ConfigStore.shared.c.showKeyboardLight = on; ConfigStore.shared.c.showSiri = on
-                                   ConfigStore.shared.c.showScreenshot = on; ConfigStore.shared.c.showRegularBar = on
+                                   ConfigStore.shared.c.stripLayout = StripSlot.normalized(cfg.stripLayout).map {
+                                       ["keyboard", "siri", "screenshot", "regular"].contains($0.id)
+                                           ? StripSlot(id: $0.id, place: on ? "more" : "off") : $0 }
                                    return
                                }
+                               if w.first == "more" { self.view.toggleStripExpanded(); return }
                                if w.first == "kbd" {
                                    try? "keyboard light: available=\(KeyboardLight.available) level=\(KeyboardLight.level)"
                                        .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
@@ -2375,6 +2507,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         if hidden {
             view.closePicker(); if view.mediaMode { view.setMediaMode(false) }
             dismissSystemModal(bar)
+            dfrSetControlStripPresence(trayId.rawValue, true)   // keep the ♪ in the Control Strip
         } else {
             present()
         }
@@ -2554,6 +2687,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             if !view.mediaMode && !view.pickerMode && !controlsOpenedForPause { controlsOpenedForPause = true; view.setMediaMode(true) }
             return
         }
+        // switching away from "Media controls": close the controls that mode opened, right away
+        if controlsOpenedForPause { controlsOpenedForPause = false; if view.mediaMode { view.setMediaMode(false) } }
         let dim = NSColor.white.withAlphaComponent(0.6)
         let a = NSMutableAttributedString()
         var key = "\u{1}paused:" + mode

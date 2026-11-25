@@ -226,15 +226,8 @@ struct AppearancePane: View {
                     Text("Minimal").tag("minimal"); Text("Pill").tag("pill")
                 }
                 .pickerStyle(.segmented)
-                Toggle("Brightness", isOn: $store.c.showBrightness)
-                Toggle("Volume", isOn: $store.c.showVolume)
-                Toggle("Library", isOn: $store.c.showApps)
-                Toggle("Keyboard brightness", isOn: $store.c.showKeyboardLight)
-                    .disabled(!KeyboardLight.available)
-                Toggle("Siri", isOn: $store.c.showSiri)
-                Toggle("Screenshot", isOn: $store.c.showScreenshot)
-                Toggle("Switch to the regular Touch Bar", isOn: $store.c.showRegularBar)
-                Text("The regular Touch Bar keeps a ♪ in its Control Strip: tap it to bring LyricsBar back. The menu bar icon can switch too.")
+                StripLayoutEditor()
+                Text("Buttons \u{201C}Behind ‹\u{201D} appear when you tap ‹ on the bar. The regular Touch Bar keeps a ♪ in its Control Strip: tap it to bring LyricsBar back (the menu bar icon can switch too). The style also applies to the playlist picker and Up Next.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Extras") {
@@ -802,5 +795,34 @@ struct DiscordPane: View {
         .navigationTitle("Discord")
         .onAppear { snap = DiscordPresence.shared.snapshot() }
         .onReceive(refresh) { _ in snap = DiscordPresence.shared.snapshot() }
+    }
+}
+
+/// Order and placement of the right-hand Touch Bar buttons.
+struct StripLayoutEditor: View {
+    @ObservedObject var store = ConfigStore.shared
+    var body: some View {
+        let layout = StripSlot.normalized(store.c.stripLayout)
+        ForEach(Array(layout.enumerated()), id: \.element.id) { i, slot in
+            HStack(spacing: 8) {
+                Image(systemName: StripSlot.icons[slot.id] ?? "questionmark").frame(width: 22)
+                Text(StripSlot.names[slot.id] ?? slot.id)
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { slot.place },
+                    set: { v in var l = layout; l[i].place = v; store.c.stripLayout = l })) {
+                    Text("On the bar").tag("bar"); Text("Behind ‹").tag("more"); Text("Off").tag("off")
+                }
+                .labelsHidden().frame(width: 130)
+                .disabled(slot.id == "keyboard" && !KeyboardLight.available)
+                Button { move(layout, i, -1) } label: { Image(systemName: "chevron.up") }
+                    .buttonStyle(.borderless).disabled(i == 0).help("Move left")
+                Button { move(layout, i, 1) } label: { Image(systemName: "chevron.down") }
+                    .buttonStyle(.borderless).disabled(i == layout.count - 1).help("Move right")
+            }
+        }
+    }
+    private func move(_ l: [StripSlot], _ i: Int, _ d: Int) {
+        var l = l; l.swapAt(i, i + d); store.c.stripLayout = l
     }
 }

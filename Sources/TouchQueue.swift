@@ -73,7 +73,7 @@ final class QueueStrip: NSView {
     private func render(_ e: Entry, width w: CGFloat) -> CGImage? {
         let s = scale
         let img = NSImage(size: NSSize(width: w, height: pillH), flipped: false) { r in
-            NSColor.white.withAlphaComponent(0.14).setFill()
+            NSColor.white.withAlphaComponent(cfg.buttonStyle == "pill" ? 0.14 : 0).setFill()   // minimal: text only
             NSBezierPath(roundedRect: r, xRadius: 8, yRadius: 8).fill()
             // title on top, artist smaller underneath, both centred
             let para = NSMutableParagraphStyle(); para.lineBreakMode = .byTruncatingTail; para.alignment = .center

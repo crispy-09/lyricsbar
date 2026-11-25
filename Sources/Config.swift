@@ -32,13 +32,8 @@ struct Config: Codable, Equatable {
     var visualizerSensitivity = 1.0
     var visualizerOpacity = 0.3
     // Touch Bar
-    var showBrightness = true
-    var showVolume = true
-    var showApps = true
-    var showKeyboardLight = false     // keyboard backlight slider
-    var showSiri = false
-    var showScreenshot = false
-    var showRegularBar = false        // button that hands the Touch Bar back to macOS
+    /// The right-hand buttons, in order. place: "bar" (always shown), "more" (behind the ‹ button), "off".
+    var stripLayout: [StripSlot] = StripSlot.defaults
     var barHidden = false             // LyricsBar is off the Touch Bar (the ♪ in the Control Strip brings it back)
     var playingShows = "lyrics"       // while playing: "lyrics" | "controls" | "title"
     var mediaAutoHide = 8.0
@@ -123,6 +118,18 @@ final class ConfigStore: ObservableObject {
             if file["lyricHoldAction"] == nil, (file["lyricTapAction"] as? String) == "controls" { merged["lyricHoldAction"] = "pause" }
             // 2 s was the old default, never a choice: move it to the new 10 s default
             if (file["artLinger"] as? Double) == 2 { merged["artLinger"] = 10.0 }
+            // the separate show-button switches became one orderable layout
+            if file["stripLayout"] == nil {
+                let on = { (k: String, d: Bool) in (file[k] as? Bool) ?? d }
+                merged["stripLayout"] = [("brightness", on("showBrightness", true) ? "bar" : "off"),
+                                         ("volume", on("showVolume", true) ? "bar" : "off"),
+                                         ("library", on("showApps", true) ? "bar" : "off"),
+                                         ("keyboard", on("showKeyboardLight", false) ? "more" : "off"),
+                                         ("siri", on("showSiri", false) ? "more" : "off"),
+                                         ("screenshot", on("showScreenshot", false) ? "more" : "off"),
+                                         ("regular", on("showRegularBar", false) ? "more" : "off")]
+                    .map { ["id": $0.0, "place": $0.1] }
+            }
             // quote rotation is now whole minutes, at least one
             if let q = file["pausedQuoteSeconds"] as? Double { merged["pausedQuoteSeconds"] = max(60, (q / 60).rounded() * 60) }
         }
@@ -151,3 +158,30 @@ final class ConfigStore: ObservableObject {
 }
 
 var cfg: Config { ConfigStore.shared.c }
+
+/// One right-hand Touch Bar button and where it goes.
+struct StripSlot: Codable, Equatable, Identifiable {
+    var id: String
+    var place: String                  // "bar" | "more" | "off"
+
+    static let names: [String: String] = ["brightness": "Brightness", "volume": "Volume", "library": "Library",
+                                          "keyboard": "Keyboard brightness", "siri": "Siri", "screenshot": "Screenshot",
+                                          "regular": "Switch to the regular Touch Bar"]
+    static let icons: [String: String] = ["brightness": "sun.max.fill", "volume": "speaker.wave.2.fill",
+                                          "library": "books.vertical.fill", "keyboard": "light.max", "siri": "siri",
+                                          "screenshot": "camera.viewfinder", "regular": "rectangle.badge.xmark"]
+    static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular"]
+    static let defaults: [StripSlot] = order.map {
+        StripSlot(id: $0, place: ["brightness", "volume", "library"].contains($0) ? "bar" : "off")
+    }
+
+    /// Known buttons only, each once, missing ones appended (off).
+    static func normalized(_ l: [StripSlot]) -> [StripSlot] {
+        var seen = Set<String>(), out: [StripSlot] = []
+        for s in l where names[s.id] != nil && !seen.contains(s.id) && ["bar", "more", "off"].contains(s.place) {
+            seen.insert(s.id); out.append(s)
+        }
+        for id in order where !seen.contains(id) { out.append(StripSlot(id: id, place: "off")) }
+        return out
+    }
+}
