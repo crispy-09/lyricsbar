@@ -752,8 +752,14 @@ final class StreamPlayer: NSObject, ObservableObject {
 
     // 3. a stream that fails (network drop, bad transcode) skips ahead instead of stalling
     private var itemObs: NSKeyValueObservation?
+    /// Precise timing: without it a seek lands by estimate and the audio can be seconds away from the time
+    /// the player reports (measured on FLAC: -7 s … +2 s), so lyrics and the scrubber were off after seeking.
+    /// The `seektest` debug hook measures this.
+    static func asset(_ url: URL) -> AVURLAsset {
+        AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+    }
     private func makeItem(_ url: URL) -> AVPlayerItem {
-        let it = AVPlayerItem(url: url)
+        let it = AVPlayerItem(asset: Self.asset(url))
         attachVisualizerTap(to: it)
         itemObs = it.observe(\.status) { [weak self] it, _ in
             DispatchQueue.main.async {
@@ -2957,6 +2963,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                }
                                if c.hasPrefix("menu") { self.view.openPicker() }
                                if c.hasPrefix("mutedtest") { self.mutedSelfTest() }
+                               if c.hasPrefix("seektest") { SeekTest.run(out: home + "/debug.out"); return }
                                if c.hasPrefix("ppos") {          // ppos = the built-in player's real position (debug.out)
                                    let sp = StreamPlayer.shared
                                    try? String(format: "%.3f %.3f %d", sp.player.currentTime().seconds, Date().timeIntervalSince1970,

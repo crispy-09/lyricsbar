@@ -33,6 +33,7 @@ Notes for coding agents (and humans) working on LyricsBar.
   - A replay alone doesn't work: songs added with "Add to queue" live in a separate queue that survives `PUT /me/player/play`. So `spotify_replace` mutes Spotify, skips (AppleScript `next track`) through everything queued, plays the current song + the new list, pauses again if it was paused, seeks back, then unmutes. It checks the result and drains again (up to 3 rounds), since the queue listing shows only ~20 songs.
   - While the bar's Up Next shows Spotify, `followSpotifyQueue()` reloads it on song change and every 6 s.
   - `QueueStrip.onClear`: swiping right at the start of the list reveals a red Clear pill.
+- `Sources/SeekTest.swift`: the `seektest` debug hook (see below).
 - `Sources/Visualizer.swift`: `AudioTap` (FFT into band levels) and `VisualizerView`. The audio source is:
   - LyricsBar's own player: `MTAudioProcessingTap` on each `AVPlayerItem`
   - other apps: a Core Audio process tap on that app's processes
@@ -75,6 +76,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `library <Section>` | Open a Library section (`Up Next`, `Lyrics`, `Search`, `Liked Songs`, `Albums`, `Artists`, `Playlists`, `Spotify`) |
 | `settings <Section>` | Open a Settings section (`General`, `Appearance`, `Providers`, `Discord`). Playlists, including pins and editing, live in `library Playlists` |
 | `qstate` | Write the queue state |
+| `seektest` | Seek accuracy self-test for the current song (about a minute, muted, on a separate player): compares the audio after each seek with a straight decode of the same file and writes how far it is from the time the player reports. Runs once as LyricsBar plays it (`StreamPlayer.asset`) and once with a plain `AVURLAsset` |
 | `ppos` | Write the built-in player's real position, wall time and `timeControlStatus` (to check lyric timing against `clock.json`) |
 | `viz` | Write the visualizer frames and levels |
 | `toast <text>`, `text <s>`, `qpreview` | UI checks |
@@ -102,6 +104,8 @@ Screenshots:
 - **No top-level `let`/`var` after the run loop starts in `main.swift`.** Code below `app.run()` never runs, so such a global stays uninitialised and crashes when read. Put constants in a type's `static let`.
 
 ## Touch Bar quirks
+
+- **Player items need precise timing.** `StreamPlayer.asset()` sets `AVURLAssetPreferPreciseDurationAndTimingKey`. Without it, AVPlayer seeks by estimate: on FLAC streams the audio landed up to 11 s away from the time the player reported, so lyrics and the scrubber were off after every seek. `seektest` measures it.
 
 - `NSButton.contentTintColor` is ignored on the Touch Bar. Use `coloredSymbol(name, size, color)`, which bakes the colour in with `isTemplate = false`.
 - Touches only carry horizontal movement. There's no vertical swipe information.
