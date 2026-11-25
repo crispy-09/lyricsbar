@@ -886,8 +886,15 @@ final class StreamPlayer: NSObject, ObservableObject {
     }
     func seek(_ s: Double) {
         cancelFade()
-        cur.seek(to: CMTime(seconds: s, preferredTimescale: 600)) { [weak self] _ in
-            DispatchQueue.main.async { self?.updateInfo() }
+        // exact, so the lyrics (timed to the hint below) match what plays
+        cur.seek(to: CMTime(seconds: s, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] done in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                // re-anchor lyricsd where the seek actually landed: Now Playing updates sent while it was
+                // seeking still carry the old position
+                if done, self.active { let t = self.cur.currentTime().seconds; if t.isFinite { noteSeek(t) } }
+                self.updateInfo()
+            }
         }
     }
     func stop() {

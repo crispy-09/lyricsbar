@@ -198,6 +198,11 @@ def _stream():
                 except (TypeError, ValueError):
                     continue
                 with _lock:
+                    h = _np.get("hint")
+                    if h and now - h[1] < 1.5 and not paused and _np["state"] \
+                            and _np["state"]["track"] == st["track"] \
+                            and abs(st["position"] + (now - anchor) * st["rate"] - (h[0] + (now - h[1]))) > 2:
+                        continue     # an update still from before the seek: the seek hint stands
                     _np["state"] = st
                     _np["anchor"] = anchor
         except Exception:
@@ -239,6 +244,7 @@ def _apply_seek(seen):
         with _lock:
             if _np["state"] and _np["anchor"] < at:
                 _np["state"]["position"], _np["anchor"] = pos, at
+                _np["hint"] = (pos, at)
     return m
 
 def main():
