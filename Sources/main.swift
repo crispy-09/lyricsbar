@@ -455,7 +455,7 @@ final class StreamPlayer: NSObject, ObservableObject {
     private var monitor: Timer?
 
     var active: Bool { !tracks.isEmpty }
-    var isPlaying: Bool { cur.timeControlStatus != .paused }
+    var isPlaying: Bool { cur.timeControlStatus != .paused && !pausing }
 
     override init() {
         cur = pa
@@ -703,8 +703,36 @@ final class StreamPlayer: NSObject, ObservableObject {
         fade = t
     }
 
+    // Pausing eases the volume down instead of cutting off; resuming eases it back up.
+    private var ramp: Timer?
+    private var pausing = false
+    static let pauseFade = 0.6, resumeFade = 0.25
+
+    /// Moves `cur`'s volume to `to` over `d` seconds, then runs `done`.
+    private func rampVolume(to: Float, over d: Double, done: (() -> Void)? = nil) {
+        ramp?.invalidate()
+        let p = cur, from = p.volume, start = Date()
+        let t = Timer(timeInterval: 0.02, repeats: true) { [weak self] timer in
+            let f = min(1, Date().timeIntervalSince(start) / d)
+            let e = Float(0.5 - cos(f * .pi) / 2)          // ease in and out
+            p.volume = from + (to - from) * e
+            if f >= 1 { timer.invalidate(); self?.ramp = nil; done?() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        ramp = t
+    }
+
+    /// Ends a pause/resume ramp at once: a pending pause takes effect, the volume goes back to full.
+    private func finishRamp() {
+        guard ramp != nil || pausing else { return }
+        ramp?.invalidate(); ramp = nil
+        if pausing { pausing = false; cur.pause(); save() }
+        cur.volume = 1
+    }
+
     /// Finish any fade immediately (used by pause / skip / seek).
     private func cancelFade() {
+        finishRamp()
         guard fade != nil else { return }
         fade?.invalidate(); fade = nil
         other.pause(); other.replaceCurrentItem(with: nil); other.volume = 1
@@ -757,9 +785,31 @@ final class StreamPlayer: NSObject, ObservableObject {
         next()
     }
 
-    func play() { guard active else { return }; cur.play() }
+    func play() {
+        guard active else { return }
+        if pausing {                                   // pressed again while fading out: come back up
+            pausing = false
+            rampVolume(to: 1, over: Self.resumeFade); objectWillChange.send(); return
+        }
+        cancelFade()
+        guard cur.timeControlStatus == .paused else { return }   // already playing
+        cur.volume = 0
+        cur.play()
+        rampVolume(to: 1, over: Self.resumeFade)
+    }
     func jump(to i: Int) { guard tracks.indices.contains(i) else { return }; index = i; playCurrent() }
-    func pause() { cancelFade(); cur.pause(); save() }
+    func pause() {
+        guard !pausing else { return }
+        cancelFade()
+        guard cur.timeControlStatus != .paused, !testMuted else { cur.pause(); save(); return }
+        pausing = true
+        objectWillChange.send()
+        rampVolume(to: 0, over: Self.pauseFade) { [weak self] in
+            guard let self, self.pausing else { return }
+            self.pausing = false
+            self.cur.pause(); self.cur.volume = 1; self.save()
+        }
+    }
     func toggle() { isPlaying ? pause() : play() }
     func next() {
         if let n = followingIndex {
