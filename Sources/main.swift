@@ -1582,7 +1582,7 @@ final class BarView: NSView {
     }
     /// A song without lyrics keeps the title card's "Title   Artist" (same key, so nothing re-animates).
     func showTitleLine(_ title: String, _ artist: String) {
-        if Date() < titleCardUntil || pausedActive { return }
+        if Date() < titleCardUntil || pausedActive || swipeDragging { return }
         guard lyricKey != "\u{1}card" else { return }
         lyricKey = "\u{1}card"
         animateLyric()
@@ -1612,6 +1612,7 @@ final class BarView: NSView {
     private var swipeGeo: (start: CGFloat, rest: CGFloat)?
     static let swipeLand: CGFloat = 110                // drag that brings the preview to its place
     static let swipeHitch: CGFloat = 90                // ↶ holds in place for this much pull before the previous song
+    static let swipePrevLand: CGFloat = 90             // then the previous song follows the finger in over this much
     private var swipeShown: SwipeTarget?
     private var swipeExtra: CGFloat = 0                // extra push on the current text when a wider title takes ↶'s place
     private let swipeMask = CALayer()                  // keeps the dragged text off the cover and buttons
@@ -1715,30 +1716,41 @@ final class BarView: NSView {
         let past = toNext ? dx < reach : dx > reach
         let eff = past ? reach + (dx - reach) * 0.15 : dx
         var target = first
-        if first == .restart, swipeRestartable, let p = swipePrevSong, dx > reach + Self.swipeHitch { target = p }
+        // past the hitch the previous song comes in from the left, 1:1 with the finger (and goes back the same way)
+        var prevIn: CGFloat?
+        if first == .restart, swipeRestartable, let p = swipePrevSong, dx > reach + Self.swipeHitch {
+            target = p
+            let s = dx - reach - Self.swipeHitch, land = Self.swipePrevLand
+            prevIn = s > land ? land + (s - land) * 0.15 : s
+        }
         swipeTarget = target
         let tg = geo(target)
         swipeExtra = 0
         lyric.layer?.setAffineTransform(CGAffineTransform(translationX: eff, y: 0))
-        let px = tg.rest - reach + eff                      // the preview's left edge on the bar
+        // the preview's left edge on the bar, and where it started from
+        let start = prevIn != nil ? tg.rest - Self.swipePrevLand : tg.rest - reach
+        let px = start + (prevIn ?? eff)
         placeSwipeMask(eff, cut: toNext ? (px - 14, true) : (px + tg.w + 14, false))
         lyric.alphaValue = max(0, 1 - abs(eff) / Self.swipeLand)
         let a = swipeText(target)
         if swipeShown != target {
-            if let shown = swipeShown, shown != target {
-                // ↶ is pushed out by the previous song (and back again)
-                let t = CATransition(); t.type = .push; t.duration = 0.22
-                t.subtype = target == .restart ? .fromRight : .fromLeft
-                t.timingFunction = .init(name: .easeOut)
+            if let shown = swipeShown, shown != target, shown != .restart, target != .restart {
+                let t = CATransition(); t.type = .fade; t.duration = 0.15    // ⏭ → the next song's name
                 swipePreview.layer?.add(t, forKey: "swap")
             }
             swipePreview.attributedStringValue = a
             swipeShown = target
         }
-        swipeGeo = (tg.rest - reach, tg.rest)             // landing moves everything by what's left of `reach`
-        swipePreview.frame = NSRect(x: tg.rest + (eff - reach) - swipeClip.frame.minX, y: lyric.frame.minY,
+        swipeGeo = (start, tg.rest)                         // landing moves everything by what's left
+        swipePreview.frame = NSRect(x: px - swipeClip.frame.minX, y: lyric.frame.minY,
                                     width: tg.w, height: lyric.frame.height)
-        swipePreview.alphaValue = min(1, abs(dx) / 60)
+        var alpha = min(1, (prevIn ?? abs(dx)) / 60)
+        if target == .restart, swipeRestartable, swipePrevSong != nil {
+            // ↶ fades over the second half of the hitch, so the previous song comes in on a clear line
+            let h = Self.swipeHitch / 2
+            alpha = min(alpha, 1 - max(0, min(1, (dx - reach - h) / h)))
+        }
+        swipePreview.alphaValue = alpha
         swipePreview.isHidden = false
     }
 
@@ -1982,7 +1994,7 @@ final class BarView: NSView {
     // MARK: state updates
 
     func setLyric(_ s: String) {
-        if Date() < titleCardUntil || pausedActive { return }
+        if Date() < titleCardUntil || pausedActive || swipeDragging { return }
         guard s != lyricKey else { return }
         lyricKey = s
         animateLyric()
@@ -1992,7 +2004,7 @@ final class BarView: NSView {
     /// What the lyric line shows while paused (Settings → General → While paused).
     var pausedActive = false
     func showPaused(_ a: NSAttributedString, key: String) {
-        guard Date() >= titleCardUntil, !outroActive else { return }
+        guard Date() >= titleCardUntil, !outroActive, !swipeDragging else { return }
         pausedActive = true
         guard lyricKey != key else { return }
         lyricKey = key
@@ -3190,11 +3202,13 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         let window = cfg.outroSeconds
         guard window > 0, view.duration > 20, !lastTitle.isEmpty else { return }
         let remaining = view.duration - view.position
-        if view.isPlaying, remaining <= window, remaining > 0.3, outroFor != lastTitle {
+        if view.isPlaying, remaining <= window, remaining > 0.3, outroFor != lastTitle,
+           !view.swipeDragging, !view.swipeSettling {
             outroFor = lastTitle
             let title = lastTitle, artist = lastArtist
             fetchNext { [weak self] next in
                 guard let self, self.lastTitle == title, self.outroFor == title else { return }
+                if self.view.swipeDragging { self.outroFor = ""; return }     // try again after the drag
                 self.view.showOutro(title, artist, next: next)
             }
         } else if view.outroActive && remaining > window + 2 {
