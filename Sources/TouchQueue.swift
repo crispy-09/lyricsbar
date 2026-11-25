@@ -395,7 +395,7 @@ final class LyricTouchArea: NSView {
         guard let s = startX else { return }
         startX = nil
         label?.layer?.setAffineTransform(.identity)
-        if held { label?.alphaValue = 1; return }
+        if held { return }                      // the hold's action owns the label now (it may be fading out)
         let x = event.touches(matching: .ended, in: self).first?.location(in: self).x ?? s
         let dx = x - s
         if abs(dx) > 60 {
@@ -408,7 +408,8 @@ final class LyricTouchArea: NSView {
     }
     override func touchesCancelled(with event: NSEvent) {
         holdTimer?.invalidate()
-        startX = nil; label?.layer?.setAffineTransform(.identity); label?.alphaValue = 1
+        startX = nil; label?.layer?.setAffineTransform(.identity)
+        if !held { label?.alphaValue = 1 }
     }
 }
 

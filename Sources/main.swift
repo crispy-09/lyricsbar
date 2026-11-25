@@ -1694,6 +1694,7 @@ final class BarView: NSView {
     }
 
     @objc func toggleMedia() {
+        if pickerParked { closePicker() }        // tucked away behind the expanded strip: act as if it were closed
         if pickerMode { closePicker() }
         else if currentTitle.isEmpty && !mediaMode { openPicker() }      // nothing loaded → choose something
         // paused or playing → the media controls (☰ in there opens the providers)
@@ -1714,6 +1715,7 @@ final class BarView: NSView {
 
     func closePicker() {
         guard pickerMode else { return }
+        pickerParked = false
         showingUpNext = false
         extras.isHidden = true
         pickerMode = false
@@ -1875,6 +1877,11 @@ final class BarView: NSView {
         pickerPage += 1; let page = pickerPage
         showingUpNext = true
         defer { updateExtras() }
+        if pickerParked {                        // asked for Up Next while tucked away: bring the picker back
+            pickerParked = false
+            setStripExpanded(false, restore: false)
+            show(pickerRow, true); show(lyric, false)
+        }
         if !pickerMode {
             pickerMode = true
             show(pickerRow, true); show(lyric, false)
@@ -2180,13 +2187,20 @@ final class BarView: NSView {
     /// Expanding makes room: the media controls / picker step aside and the lyric (or title) moves to the left;
     /// folding back restores what was there.
     var restoreMediaAfterStrip = false
+    var pickerParked = false                 // the picker is hidden (not closed) while the strip is expanded
     func setStripExpanded(_ on: Bool, restore: Bool = true) {
         stripTimer?.invalidate()
         if on {
             if !stripExpanded {
                 restoreMediaAfterStrip = mediaMode
                 if mediaMode { setMediaMode(false) }
-                if pickerMode { closePicker() }
+                if pickerMode && !pickerParked {
+                    // tuck the picker away on whatever page it's on; it comes back when the strip folds
+                    pickerParked = true
+                    pickerTimer?.invalidate()
+                    extras.isHidden = true
+                    show(pickerRow, false); show(lyric, true)
+                }
             }
             stripTimer = Timer.scheduledTimer(withTimeInterval: max(4, cfg.panelAutoHide), repeats: false) { [weak self] _ in
                 self?.setStripExpanded(false)
@@ -2207,7 +2221,13 @@ final class BarView: NSView {
         slideLyricAlignment(left: on)
         if on { expandStrip() }
         if !on {
-            if restore && restoreMediaAfterStrip && !mediaMode && !pickerMode { setMediaMode(true) }
+            if pickerParked {
+                pickerParked = false
+                if restore && !mediaMode && pickerMode {
+                    show(pickerRow, true); show(lyric, false)
+                    updateExtras(); bumpPickerTimer()
+                } else { closePicker() }
+            } else if restore && restoreMediaAfterStrip && !mediaMode && !pickerMode { setMediaMode(true) }
             restoreMediaAfterStrip = false
         }
     }
