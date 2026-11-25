@@ -78,6 +78,11 @@ struct GeneralPane: View {
                               format: { $0 == 0 ? "Off" : String(format: "%.1fs", $0) })
                 Toggle("No crossfade between songs from the same album", isOn: $store.c.noCrossfadeInAlbums)
                     .disabled(store.c.crossfadeSeconds == 0)
+                Toggle("Crossfade when skipping songs", isOn: $store.c.skipCrossfade)
+                if store.c.skipCrossfade {
+                    LabeledSlider(title: "Skip crossfade", value: $store.c.skipCrossfadeSeconds, range: 0.5...6, step: 0.5,
+                                  format: { String(format: "%.1fs", $0) })
+                }
                 Text("Fades between songs in Subsonic playlists played by LyricsBar. Albums usually flow from one track into the next, so by default they play without a fade. Other players use their own settings.")
                     .font(.caption).foregroundStyle(.secondary)
             }
