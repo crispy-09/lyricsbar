@@ -63,16 +63,6 @@ struct GeneralPane: View {
     var body: some View {
         Form {
             Section("Playback") {
-                Picker("Default player", selection: $store.c.defaultApp) {
-                    if store.c.defaultApp.isEmpty { Text("The first service you connect").tag("") }
-                    Text("Subsonic").tag("subsonic"); Text("Spotify").tag("spotify")
-                    Text("Apple Music").tag("applemusic"); Text("Nothing (open the picker)").tag("ask")
-                }
-                Text((store.c.defaultApp == "subsonic"
-                     ? "▶ with nothing loaded resumes your last LyricsBar queue, or shuffles your Liked Songs."
-                     : "What ▶ starts when nothing is loaded. Also stops macOS from opening Apple Music.")
-                     + " When LyricsBar starts, a paused song left in another app doesn't take over the bar.")
-                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Shuffle Subsonic playlists by default", isOn: $store.c.defaultShuffle)
                 Toggle("Pause other players when starting a playlist", isOn: $store.c.pauseOthers)
                 Toggle("Resume the LyricsBar queue after a restart (paused)", isOn: $store.c.resumeQueue)
@@ -597,6 +587,18 @@ struct ProvidersPane: View {
     @State private var rev = 0      // bumps after sign-in so the status badges refresh
     var body: some View {
         Form {
+            Section {
+                Picker("Default player", selection: $store.c.defaultApp) {
+                    if store.c.defaultApp.isEmpty { Text("The first service you connect").tag("") }
+                    Text("Subsonic").tag("subsonic"); Text("Spotify").tag("spotify")
+                    Text("Apple Music").tag("applemusic"); Text("Nothing (open the picker)").tag("ask")
+                }
+                Text((store.c.defaultApp == "subsonic"
+                     ? "▶ with nothing loaded resumes your last LyricsBar queue, or shuffles your Liked Songs."
+                     : "What ▶ starts when nothing is loaded. Also stops macOS from opening Apple Music.")
+                     + " When LyricsBar starts, a paused song left in another app doesn't take over the bar.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 row("Subsonic", icon: "server.rack", on: $store.c.showSubsonic,
                     status: Subsonic.auth.map { "Signed in as \($0.u)" } ?? "Not signed in", ready: Subsonic.auth != nil,
