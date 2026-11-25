@@ -111,7 +111,7 @@ Spotify's Web API can only read the queue and add to it. It has no way to remove
 - **Not tested:** Spotify's own crossfade setting. With it on, the hand-over may come too late for a clean change.
 - **The queue Spotify reports can lag.** Up Next on the bar reloads when the song changes and every few seconds, but Spotify sometimes takes a moment to catch up.
 
-- **Cast with the built-in player**: the same Cast button opens Apple's AirPlay menu on screen, at the mouse pointer (macOS doesn't let an app list AirPlay speakers, and a menu can't open on the Touch Bar). Only LyricsBar's music goes to the speaker you pick, not the rest of the Mac's sound.
+- **Cast with anything other than Spotify** (the built-in player, Apple Music, a browser): the same Cast button opens Control Center's sound output list on screen, with your speakers, headphones and AirPlay devices. What you pick there carries all of the Mac's sound. This needs LyricsBar allowed under System Settings → Privacy & Security → Accessibility (macOS asks the first time). Without it, the built-in player opens Apple's smaller AirPlay menu at the mouse pointer instead. A menu can't open on the Touch Bar itself. If you build without a signing identity, macOS forgets the permission after each update.
 - **Apple Music**: uses the Music app through AppleScript.
 
 ### Scrobbling

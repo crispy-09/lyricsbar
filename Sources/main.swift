@@ -2496,14 +2496,24 @@ final class BarView: NSView {
 
     // MARK: cast (Spotify Connect)
 
-    /// The Cast button. Spotify: the picker lists its Connect devices; a tap moves playback there. LyricsBar's
-    /// own player: Apple's AirPlay menu opens on screen (macOS can't list AirPlay speakers for an app).
+    /// The Cast button. Spotify: the picker lists its Connect devices; a tap moves playback there. Anything
+    /// else: Control Center's sound output list opens on screen (macOS can't list AirPlay speakers for an app).
+    /// Without the Accessibility permission, LyricsBar's own player falls back to Apple's AirPlay menu.
     @objc func openCast() {
         let own = StreamPlayer.shared.active && bundleId != "com.spotify.client"
-        if own || !cfg.showSpotify {
+        if own || !cfg.showSpotify || (bundleId != "com.spotify.client" && !currentTitle.isEmpty) {
+            // anything that isn't Spotify: the Mac's own sound output list, in Control Center
             setStripExpanded(false)
-            if own, AirPlayMenu.shared.show() { toast("Pick a speaker on screen", seconds: 2.5) }
-            else { toast("Cast works with Spotify and LyricsBar's own player", seconds: 3) }
+            let fallback = { [weak self] (why: String) in
+                if own, AirPlayMenu.shared.show() { self?.toast("Pick a speaker on screen", seconds: 2.5) }
+                else { self?.toast(why, seconds: 4) }
+            }
+            guard ControlCenterSound.trusted else {
+                ControlCenterSound.askPermission()
+                fallback("Allow LyricsBar under Privacy & Security → Accessibility to open the sound menu")
+                return
+            }
+            ControlCenterSound.open { ok in if !ok { fallback("Couldn't open Control Center's sound menu") } }
             return
         }
         if !pickerMode || pickerParked { closePicker(); openPicker() }

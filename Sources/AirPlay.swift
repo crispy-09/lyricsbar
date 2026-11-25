@@ -3,6 +3,7 @@
 // Bar, so this holds Apple's route picker button in an invisible window and clicks it.
 
 import AVKit
+import ApplicationServices
 
 final class AirPlayMenu: NSObject, AVRoutePickerViewDelegate {
     static let shared = AirPlayMenu()
@@ -33,5 +34,64 @@ final class AirPlayMenu: NSObject, AVRoutePickerViewDelegate {
     func close() { window?.orderOut(nil); window = nil }
     func routePickerViewDidEndPresentingRoutes(_ v: AVRoutePickerView) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.close() }
+    }
+}
+
+/// Control Center's sound output list (speakers, headphones, AirPlay), opened by pressing its controls through
+/// Accessibility: the Sound item in the menu bar if it's there, otherwise Control Center and then its AirPlay
+/// button. Needs the Accessibility permission. What's picked there carries all of the Mac's sound.
+enum ControlCenterSound {
+    static var trusted: Bool { AXIsProcessTrusted() }
+    /// Shows the system's "allow in Accessibility" dialog (macOS only shows it when not yet allowed).
+    static func askPermission() {
+        _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+    }
+
+    private static func attr(_ e: AXUIElement, _ a: String) -> AnyObject? {
+        var v: AnyObject?
+        return AXUIElementCopyAttributeValue(e, a as CFString, &v) == .success ? v : nil
+    }
+    /// First element with one of these identifiers, at most `depth` levels down.
+    private static func find(_ ids: [String], in e: AXUIElement, depth: Int) -> AXUIElement? {
+        if let id = attr(e, "AXIdentifier") as? String, ids.contains(id) { return e }
+        guard depth > 0 else { return nil }
+        for k in attr(e, "AXChildren") as? [AXUIElement] ?? [] {
+            if let hit = find(ids, in: k, depth: depth - 1) { return hit }
+        }
+        return nil
+    }
+    private static func app(_ bundle: String) -> AXUIElement? {
+        guard let p = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { return nil }
+        let e = AXUIElementCreateApplication(p.processIdentifier)
+        AXUIElementSetMessagingTimeout(e, 2)
+        return e
+    }
+    private static func windows(_ bundle: String) -> [AXUIElement] {
+        app(bundle).flatMap { attr($0, "AXWindows") as? [AXUIElement] } ?? []
+    }
+    private static func press(_ e: AXUIElement) -> Bool { AXUIElementPerformAction(e, "AXPress" as CFString) == .success }
+
+    /// `done(true)` once the list is open.
+    static func open(_ done: @escaping (Bool) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let finish = { (ok: Bool) in DispatchQueue.main.async { done(ok) } }
+            // the menu bar's items belong to MenuBarAgent on newer macOS, to Control Center itself before
+            func item(_ id: String) -> AXUIElement? {
+                for b in ["com.apple.MenuBarAgent", "com.apple.controlcenter"] {
+                    for w in windows(b) { if let e = find([id], in: w, depth: 4) { return e } }
+                    if let a = app(b), let bar = attr(a, "AXExtrasMenuBar"), let e = find([id], in: bar as! AXUIElement, depth: 3) { return e }
+                }
+                return nil
+            }
+            if let sound = item("com.apple.menuextra.sound") { finish(press(sound)); return }
+            guard let cc = item("com.apple.menuextra.controlcenter"), press(cc) else { finish(false); return }
+            for _ in 0..<20 {                                   // Control Center takes a moment to draw
+                Thread.sleep(forTimeInterval: 0.1)
+                for w in windows("com.apple.controlcenter") {
+                    if let b = find(["controlcenter-airplay"], in: w, depth: 5) { finish(press(b)); return }
+                }
+            }
+            finish(true)                                        // Control Center is open; its Sound row is one tap away
+        }
     }
 }
