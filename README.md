@@ -78,7 +78,7 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 
 Everything else is in **Settings** (Library window sidebar, or ⌘,):
 
-- **General**: what ▶ starts when nothing is loaded, shuffle, resume, crossfade, lyric gestures, auto-hide timers
+- **General**: what ▶ starts when nothing is loaded, shuffle, resume, crossfade (off between songs of the same album by default), lyric gestures, auto-hide timers
 - **Appearance**: background (how long the album art stays after pausing), lyrics, what the bar shows while playing (lyrics, media controls, or title and artist) and while paused (lyrics, media controls, title and artist, rotating quotes, or your own phrase), visualizer, buttons. With a rotating wallpaper the background is black, because macOS doesn't report which picture is showing
 - **Providers**: the providers shown in the picker, scrobbling, accounts
 - **Discord**: Rich Presence

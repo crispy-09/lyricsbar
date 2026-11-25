@@ -48,6 +48,7 @@ struct Config: Codable, Equatable {
     var defaultShuffle = false
     var pauseOthers = true
     var crossfadeSeconds = 4.0        // built-in Subsonic player only; 0 = off
+    var noCrossfadeInAlbums = true    // songs from the same album play back to back without a fade
     var repeatMode = "off"            // "off" | "all" | "one"  (built-in player)
     var resumeQueue = true            // reload the built-in player's queue (paused) after a restart
     var showAppleMusic = false

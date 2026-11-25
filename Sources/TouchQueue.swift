@@ -349,12 +349,16 @@ final class SwipeLabel: NSTextField {
 /// Moves `label` with the finger for feedback. Ignores touches while the label is hidden (menus open).
 final class LyricTouchArea: NSView {
     weak var label: NSView?
-    var onSwipe: ((Int) -> Void)?       // +1 next, -1 previous
     var onTap: (() -> Void)?
     var onLongPress: (() -> Void)?
+    // horizontal drags: the owner moves the text (and a preview of the next/previous song) and decides on release
+    var onDragBegan: (() -> Void)?
+    var onDrag: ((CGFloat) -> Void)?
+    var onDragEnded: ((CGFloat) -> Void)?
     private var startX: CGFloat?
     private var startTime = Date()
     private var held = false
+    private var dragging = false
     private var holdTimer: Timer?
 
     override init(frame: NSRect) {
@@ -371,12 +375,11 @@ final class LyricTouchArea: NSView {
 
     override func touchesBegan(with event: NSEvent) {
         guard let t = event.touches(matching: .began, in: self).first else { return }
-        startX = t.location(in: self).x; startTime = Date(); held = false
+        startX = t.location(in: self).x; startTime = Date(); held = false; dragging = false
         holdTimer?.invalidate()
         let h = Timer(timeInterval: 0.5, repeats: false) { [weak self] _ in
-            guard let self, self.startX != nil else { return }
+            guard let self, self.startX != nil, !self.dragging else { return }
             self.held = true
-            self.label?.alphaValue = 1
             self.onLongPress?()
         }
         RunLoop.main.add(h, forMode: .common)
@@ -385,31 +388,22 @@ final class LyricTouchArea: NSView {
     override func touchesMoved(with event: NSEvent) {
         guard let s = startX, !held, let t = event.touches(matching: .moved, in: self).first else { return }
         let dx = t.location(in: self).x - s
-        if abs(dx) > 10 { holdTimer?.invalidate() }
-        // the text follows the finger (damped) and fades as it goes
-        label?.layer?.setAffineTransform(CGAffineTransform(translationX: dx * 0.45, y: 0))
-        label?.alphaValue = 1 - min(0.7, abs(dx) / 220)
+        if !dragging && abs(dx) > 10 { dragging = true; holdTimer?.invalidate(); onDragBegan?() }
+        if dragging { onDrag?(dx) }
     }
     override func touchesEnded(with event: NSEvent) {
         holdTimer?.invalidate()
         guard let s = startX else { return }
         startX = nil
-        label?.layer?.setAffineTransform(.identity)
         if held { return }                      // the hold's action owns the label now (it may be fading out)
         let x = event.touches(matching: .ended, in: self).first?.location(in: self).x ?? s
-        let dx = x - s
-        if abs(dx) > 60 {
-            label?.alphaValue = 0.35            // the new song's title card brings it back
-            onSwipe?(dx < 0 ? 1 : -1)
-        } else {
-            label?.alphaValue = 1
-            if abs(dx) < 10 && Date().timeIntervalSince(startTime) < 0.5 { onTap?() }
-        }
+        if dragging { dragging = false; onDragEnded?(x - s); return }
+        if abs(x - s) < 10 && Date().timeIntervalSince(startTime) < 0.5 { onTap?() }
     }
     override func touchesCancelled(with event: NSEvent) {
         holdTimer?.invalidate()
-        startX = nil; label?.layer?.setAffineTransform(.identity)
-        if !held { label?.alphaValue = 1 }
+        startX = nil
+        if dragging { dragging = false; onDragEnded?(0) }   // back where it was
     }
 }
 

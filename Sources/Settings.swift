@@ -76,7 +76,9 @@ struct GeneralPane: View {
                 Toggle("Resume the LyricsBar queue after a restart (paused)", isOn: $store.c.resumeQueue)
                 LabeledSlider(title: "Crossfade", value: $store.c.crossfadeSeconds, range: 0...12, step: 0.5,
                               format: { $0 == 0 ? "Off" : String(format: "%.1fs", $0) })
-                Text("Fades between songs in Subsonic playlists played by LyricsBar. Other players use their own settings.")
+                Toggle("No crossfade between songs from the same album", isOn: $store.c.noCrossfadeInAlbums)
+                    .disabled(store.c.crossfadeSeconds == 0)
+                Text("Fades between songs in Subsonic playlists played by LyricsBar. Albums usually flow from one track into the next, so by default they play without a fade. Other players use their own settings.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Lyrics gestures") {

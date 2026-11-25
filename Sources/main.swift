@@ -648,9 +648,16 @@ final class StreamPlayer: NSObject, ObservableObject {
         return cfg.repeatMode == "all" && !tracks.isEmpty ? 0 : nil
     }
 
+    private func sameAlbum(_ a: StreamTrack, _ b: StreamTrack) -> Bool {
+        !a.album.isEmpty && a.album == b.album && a.artist == b.artist
+            && (a.coverId == nil || b.coverId == nil || a.coverId == b.coverId)
+    }
+
     private func checkCrossfade() {
         let xf = cfg.crossfadeSeconds
-        guard xf > 0, active, isPlaying, fade == nil, cfg.repeatMode != "one", followingIndex != nil else { return }
+        guard xf > 0, active, isPlaying, fade == nil, cfg.repeatMode != "one", let n = followingIndex else { return }
+        // albums flow straight into the next track: no fade between songs of the same album
+        if cfg.noCrossfadeInAlbums, sameAlbum(tracks[index], tracks[n]) { return }
         let d = cur.currentItem?.duration.seconds ?? 0
         let dur = d.isFinite && d > 0 ? d : tracks[index].duration
         let pos = cur.currentTime().seconds
@@ -1147,6 +1154,7 @@ final class BarView: NSView {
     var pickerTimer: Timer?
     var shuffle = false
     var currentTitle = ""
+    var currentArtist = ""
     var pickerRow: NSStackView!
     var pickerTransport: Capsule!
     var pickerPlayBtn: PillButton!
@@ -1308,13 +1316,10 @@ final class BarView: NSView {
             DispatchQueue.main.async { self?.syncSpotifyStrip() }
         }
         lyricArea.label = lyric
-        lyricArea.onSwipe = { [weak self] dir in
-            guard let self, !self.currentTitle.isEmpty else { self?.lyric.alphaValue = 1; return }
-            self.pendingSlide = (dir > 0 ? .fromRight : .fromLeft, Date())
-            _ = self.lyric
-            dir > 0 ? self.next() : self.prev()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.lyric.alphaValue = 1 }
-        }
+        setUpSwipe()
+        lyricArea.onDragBegan = { [weak self] in self?.beginSwipe() }
+        lyricArea.onDrag = { [weak self] dx in self?.updateSwipe(dx) }
+        lyricArea.onDragEnded = { [weak self] dx in self?.endSwipe(dx) }
         // tap and long-press each do what's chosen in Settings → General → Lyrics gestures
         lyricArea.onTap = { [weak self] in self?.lyricGesture(cfg.lyricTapAction) }
         lyricArea.onLongPress = { [weak self] in self?.lyricGesture(cfg.lyricHoldAction) }
@@ -1501,6 +1506,19 @@ final class BarView: NSView {
 
     /// "Title · Artist" for a few seconds when a new song starts; lyrics resume afterwards.
     func showTitleCard(_ title: String, _ artist: String, slideIn: Bool = false) {
+        if let l = swipeLanded, l.0 == title, Date().timeIntervalSince(l.1) < 8 {
+            // the swipe already put this song's title in place: just settle it
+            swipeLanded = nil; outroActive = false; pendingSlide = nil
+            if !swipeSettling {                     // still sliding: the swipe puts the text in when it lands
+                lyric.alphaValue = 1
+                lyric.attributedStringValue = titleText(title, artist)
+            }
+            lyricKey = "\u{1}card"
+            titleCardUntil = cfg.titleCardSeconds > 0 ? Date().addingTimeInterval(cfg.titleCardSeconds) : .distantPast
+            if cfg.titleCardSeconds <= 0 { lyricKey = "\u{1}" }
+            return
+        }
+        swipeLanded = nil
         let wasOutro = outroActive
         outroActive = false
         guard cfg.titleCardSeconds > 0, !title.isEmpty else {
@@ -1556,6 +1574,155 @@ final class BarView: NSView {
         guard w <= avail else { return nil }
         return lyricCentered ? (lyric.bounds.width - w) / 2 : 2
     }
+    // MARK: swipe between songs
+
+    let swipeClip = NSView()
+    let swipePreview = NSTextField(labelWithString: "")
+    var swipeNext: (String, String)?, swipePrev: (String, String)?
+    var swipeDragging = false
+    var swipeLanded: (String, Date)?
+    var swipeSettling = false
+    var peekNext: ((@escaping ((String, String)?) -> Void) -> Void)?   // App: the next song for any player
+    private var swipeGeo: (start: CGFloat, rest: CGFloat)?
+
+    func setUpSwipe() {
+        swipeClip.wantsLayer = true
+        swipeClip.layer?.masksToBounds = true
+        swipeClip.isHidden = true
+        swipePreview.lineBreakMode = .byTruncatingTail
+        swipeClip.addSubview(swipePreview)
+        addSubview(swipeClip, positioned: .above, relativeTo: lyric)
+    }
+
+    func beginSwipe() {
+        guard !currentTitle.isEmpty else { return }
+        swipeDragging = true
+        lyric.layer?.removeAnimation(forKey: "swipe")
+        layoutSubtreeIfNeeded()
+        // the preview stays between the cover and whatever is on the right
+        let left = artButton.frame.maxX + 6
+        let right = ([strip, panel, mediaView] as [NSView]).filter { !$0.isHidden }.map(\.frame.minX).min() ?? bounds.maxX
+        swipeClip.frame = NSRect(x: left, y: 0, width: max(0, right - 8 - left), height: bounds.height)
+        swipeClip.isHidden = false
+        swipePreview.isHidden = true
+        let sp = StreamPlayer.shared
+        let own = bundleId == Bundle.main.bundleIdentifier && sp.active
+        // previous restarts the song after 3 s (and at the start of the queue)
+        if position > 3 || (own && sp.index == 0) { swipePrev = (currentTitle, currentArtist) }
+        else if own, sp.tracks.indices.contains(sp.index - 1) { swipePrev = (sp.tracks[sp.index - 1].title, sp.tracks[sp.index - 1].artist) }
+        else { swipePrev = nil }
+        swipeNext = nil
+        if own, let n = sp.followingIndex { swipeNext = (sp.tracks[n].title, sp.tracks[n].artist) }
+        else {
+            peekNext? { [weak self] n in
+                guard let self, self.swipeDragging, let n, !n.0.isEmpty else { return }
+                self.swipeNext = n
+                self.updateSwipe(self.lyric.layer?.affineTransform().tx ?? 0)
+            }
+        }
+    }
+
+    func updateSwipe(_ dx: CGFloat) {
+        guard swipeDragging else { return }
+        lyric.layer?.setAffineTransform(CGAffineTransform(translationX: dx, y: 0))
+        lyric.alphaValue = 1 - min(0.6, abs(dx) / 300)
+        let toNext = dx < 0
+        guard let nb = toNext ? swipeNext : swipePrev else { swipePreview.isHidden = true; swipeGeo = nil; return }
+        let a = titleText(nb.0, nb.1)
+        if swipePreview.attributedStringValue.string != a.string { swipePreview.attributedStringValue = a }
+        swipePreview.sizeToFit()
+        let w = swipePreview.frame.width
+        // where the new title will sit once it's the song, and where it waits beside the current text
+        let rest = lyricCentered ? lyric.frame.midX - w / 2 : lyric.frame.minX
+        let curLeft = lyric.frame.minX + (textStartX(lyric.attributedStringValue) ?? 2)
+        let curRight = min(curLeft + ceil(lyric.attributedStringValue.size().width), lyric.frame.maxX)
+        let start = toNext ? curRight + 48 : curLeft - 48 - w
+        swipeGeo = (start, rest)
+        swipePreview.frame.origin = NSPoint(x: start + dx - swipeClip.frame.minX, y: lyric.frame.minY)
+        swipePreview.frame.size.height = lyric.frame.height
+        swipePreview.alphaValue = min(1, abs(dx) / 60)
+        swipePreview.isHidden = false
+    }
+
+    func endSwipe(_ dx: CGFloat) {
+        guard swipeDragging else { return }
+        swipeDragging = false
+        let toNext = dx < 0
+        let commit = abs(dx) > 60
+        let nb = toNext ? swipeNext : swipePrev
+        if !commit {
+            // brought back to the middle: stay on this song
+            moveLyric(to: 0, alpha: 1)
+            if let g = swipeGeo { movePreview(to: g.start, alpha: 0) } else { swipeClip.isHidden = true }
+            return
+        }
+        if let nb, let g = swipeGeo, !swipePreview.isHidden {
+            let travel = g.rest - g.start                  // the preview lands where the title will be
+            movePreview(to: g.rest, alpha: 1)
+            // nothing else may write to the line while it slides out (lyrics, the song change's title card)
+            swipeSettling = true
+            lyricKey = "\u{1}card"
+            titleCardUntil = Date().addingTimeInterval(max(cfg.titleCardSeconds, 2))
+            moveLyric(to: travel, alpha: 0) { [weak self] in
+                guard let self else { return }
+                CATransaction.begin(); CATransaction.setDisableActions(true)
+                self.lyric.layer?.removeAnimation(forKey: "swipe")
+                self.lyric.layer?.setAffineTransform(.identity)
+                self.lyric.attributedStringValue = self.titleText(nb.0, nb.1)
+                self.lyric.alphaValue = 1
+                self.pausedActive = false
+                self.swipeClip.isHidden = true
+                CATransaction.commit()
+                self.swipeSettling = false
+            }
+            swipeLanded = (nb.0, Date())
+            pendingSlide = nil
+        } else {
+            // nothing to preview: the text leaves, the new title slides in when the song changes
+            pendingSlide = (toNext ? .fromRight : .fromLeft, Date())
+            moveLyric(to: toNext ? -240 : 240, alpha: 0) { [weak self] in
+                self?.lyric.layer?.setAffineTransform(.identity)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in self?.lyric.alphaValue = 1 }
+            }
+            swipeClip.isHidden = true
+        }
+        toNext ? next() : prev()
+    }
+
+    private func moveLyric(to x: CGFloat, alpha: CGFloat, done: (() -> Void)? = nil) {
+        guard let layer = lyric.layer else { done?(); return }
+        let from = layer.affineTransform().tx
+        // timed rather than a CATransaction completion: AppKit can end the layer animation early
+        if let done { DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
+            if self?.swipeDragging == false { done() } } }
+        CATransaction.begin()
+        let m = CABasicAnimation(keyPath: "transform.translation.x")
+        m.fromValue = from; m.toValue = x; m.duration = 0.3
+        m.timingFunction = .init(name: .easeOut)
+        layer.setAffineTransform(CGAffineTransform(translationX: x, y: 0))
+        layer.add(m, forKey: "swipe")
+        CATransaction.commit()
+        NSAnimationContext.runAnimationGroup { c in c.duration = 0.3; lyric.animator().alphaValue = alpha }
+    }
+
+    private func movePreview(to x: CGFloat, alpha: CGFloat) {
+        let target = NSPoint(x: x - swipeClip.frame.minX, y: swipePreview.frame.minY)
+        NSAnimationContext.runAnimationGroup({ c in
+            c.duration = 0.3; c.timingFunction = .init(name: .easeOut)
+            swipePreview.animator().setFrameOrigin(target)
+            swipePreview.animator().alphaValue = alpha
+        }, completionHandler: { [weak self] in
+            guard let self, !self.swipeDragging, alpha == 0 else { return }
+            self.swipeClip.isHidden = true
+        })
+    }
+
+    func relayoutLyric() {
+        lyric.invalidateIntrinsicContentSize()
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+    }
+
     /// Switches the lyric between centred and left-aligned, sliding the text across instead of jumping.
     func slideLyricAlignment(left: Bool) {
         layoutSubtreeIfNeeded()
@@ -2462,6 +2629,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         let tray = NSCustomTouchBarItem(identifier: trayId)
         tray.view = ControlStripButton(coloredSymbol("music.note", 15, .white), self, #selector(showOnBar))
         view.onRegularBar = { [weak self] in self?.setBarHidden(true) }
+        view.peekNext = { [weak self] done in self?.fetchNext(done) ?? done(nil) }
         addSystemTrayItem(tray)
         dfrSetControlStripPresence(trayId.rawValue, true)
         dfrShowCloseBox(false)
@@ -2527,6 +2695,23 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    return
                                }
                                if w.first == "more" { self.view.toggleStripExpanded(); return }
+                               if w.first == "swipe", w.count >= 2, let dx = Double(w[1]) {   // swipe DX [back] = simulated drag
+                                   let v = self.view, back = w.count > 2
+                                   v.beginSwipe()
+                                   for i in 1...20 {
+                                       DispatchQueue.main.asyncAfter(deadline: .now() + 0.05 * Double(i)) {
+                                           let f = Double(i) / 20, x = back ? dx * (f < 0.5 ? f * 2 : (1 - f) * 2) : dx * f
+                                           v.updateSwipe(CGFloat(x))
+                                           if i == 20 { v.endSwipe(CGFloat(x)) }
+                                       }
+                                   }
+                                   return
+                               }
+                               if w.first == "lyricstate" {      // lyricstate = what the lyric line is doing (debug.out)
+                                   let v = self.view, l = v.lyric
+                                   let info = "hidden=\(l.isHidden) alpha=\(l.alphaValue) text=\(l.stringValue.prefix(40)) key=\(v.lyricKey.debugDescription) frame=\(l.frame) paused=\(v.pausedActive) card=\(v.titleCardUntil) media=\(v.mediaMode) picker=\(v.pickerMode) anims=\(l.layer?.animationKeys() ?? []) transform=\(l.layer?.affineTransform() ?? .identity) mask=\(l.layer?.mask != nil) layerOpacity=\(l.layer?.opacity ?? -1)"
+                                   try? info.write(toFile: home + "/debug.out", atomically: true, encoding: .utf8); return
+                               }
                                if w.first == "outro" {           // outro = show Up Next now with a sample next song
                                    self.view.showOutro(self.lastTitle, self.lastArtist, next: ("Sample Song", "Sample Artist"))
                                    let v = self.view, o = v.subviews.last
@@ -2628,6 +2813,10 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     @objc func present() {
         guard !cfg.barHidden else { return }
         presentSystemModal(bar, trayId: trayId.rawValue)
+        // while off the Touch Bar the view had no room and the lyric collapsed to nothing; lay it out again
+        for d in [0.05, 0.4] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + d) { [weak self] in self?.view.relayoutLyric() }
+        }
     }
     @objc func showOnBar() { setBarHidden(false) }
     @objc func toggleBarHidden() { setBarHidden(!cfg.barHidden) }
@@ -2754,6 +2943,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                 outroFor = ""
             }
             view.currentTitle = title
+            view.currentArtist = lastArtist
             let sp = StreamPlayer.shared
             if (j["playing"] as? Bool ?? false), (j["bundle"] as? String ?? "") != Bundle.main.bundleIdentifier,
                sp.isPlaying, Date().timeIntervalSince(sp.startedAt) > 3 {
