@@ -135,6 +135,7 @@ You can customize:
 - the activity type ("Listening to" or "Playing") and the top line after it (default `{artist}`, so "Listening to Glass Animals"). Vesktop shows this; the official Discord app always shows your application's name there
 - the two text lines and the picture's hover text, using templates with `{title}` `{artist}` `{album}` `{lyric}` `{player}`
 - what the member list shows
+- which players are shown. Spotify is skipped by default (it has its own presence), and so are web browsers, because a browser reports whatever tab is making sound; turn on "Include web browsers" if you want those
 - the progress bar
 - whether it hides or shows "Paused" when paused
 - which players count. Spotify is skipped by default because it already has its own presence.

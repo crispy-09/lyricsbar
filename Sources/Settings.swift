@@ -333,8 +333,9 @@ func loadPlaylists(_ provider: String) async -> Result<[PlaylistRow], Error> {
         }
     }
     func reloadSongs() {
+        loaded = false
         guard let id = selected else { songs = []; return }
-        run { self.songs = try await Subsonic.playlist(id).1 }
+        run { self.songs = try await Subsonic.playlist(id).1; self.loaded = true }
     }
     func create(_ name: String) {
         run { try await Subsonic.create(name); self.playlists = try await Subsonic.playlists()
@@ -352,24 +353,37 @@ func loadPlaylists(_ provider: String) async -> Result<[PlaylistRow], Error> {
                       self.playlists = try await Subsonic.playlists() }
         Task { let ok = await t.value; done?(ok) }
     }
-    /// Removes by song identity: the list updates at once and the server gets the whole new order.
+    /// Every edit changes the list here at once, then sends the server the whole list as it is when its turn
+    /// comes. (Each edit used to send the list it saw when it was made, so a remove made while an add was
+    /// still on its way wiped the added song.) If the server refuses, the list is loaded again.
+    private var loaded = false            // never send a list that wasn't loaded first: it would wipe the playlist
+    private func push() {
+        guard let id = selected, loaded else { return }
+        run {
+            do { try await Subsonic.setSongs(id, self.songs.map(\.id)) }
+            catch {
+                if let now = try? await Subsonic.playlist(id).1 { self.songs = now } else { self.loaded = false }
+                throw error
+            }
+            self.playlists = try await Subsonic.playlists()
+        }
+    }
     func remove(_ offsets: IndexSet) {
-        guard let id = selected else { return }
+        guard loaded else { return }
         let gone = Set(offsets.compactMap { songs.indices.contains($0) ? songs[$0].uid : nil })
         songs.removeAll { gone.contains($0.uid) }
-        let ids = songs.map(\.id)
-        run { try await Subsonic.setSongs(id, ids); self.playlists = try await Subsonic.playlists() }
+        push()
     }
     func move(_ from: IndexSet, _ to: Int) {
-        guard let id = selected else { return }
+        guard loaded else { return }
         songs.move(fromOffsets: from, toOffset: to)
-        let ids = songs.map(\.id)
-        run { try await Subsonic.setSongs(id, ids) }
+        push()
     }
     func add(_ s: SSong) {
-        guard let id = selected else { return }
-        run { try await Subsonic.add(id, songs: [s.id]); self.songs = try await Subsonic.playlist(id).1
-              self.playlists = try await Subsonic.playlists() }
+        guard loaded else { return }
+        // a fresh copy: the same search result can be added twice, and rows are told apart by uid
+        songs.append(SSong(id: s.id, title: s.title, artist: s.artist, album: s.album, duration: s.duration, coverArt: s.coverArt))
+        push()
     }
     func search(_ q: String) {
         guard !q.trimmingCharacters(in: .whitespaces).isEmpty else { results = []; return }
@@ -777,6 +791,11 @@ struct DiscordPane: View {
                 }
                 Text("Spotify already shows its own Discord presence, so it's skipped by default to avoid showing the song twice.")
                     .font(.caption).foregroundStyle(.secondary)
+                if store.c.discordPlayers != "own" {
+                    Toggle("Include web browsers", isOn: $store.c.discordBrowsers)
+                    Text("A browser reports whatever tab is making sound, including videos, so it's left out unless you turn this on.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Show album art (looked up on Apple's public iTunes Search)", isOn: $store.c.discordAlbumArt)
                 TextField("Fallback picture", text: $store.c.discordImage, prompt: Text("asset name or https:// link (optional)"))
                 Text("Your Subsonic covers can't be shown: their links contain your login. The album-art lookup sends only the artist and album name to Apple.")

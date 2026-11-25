@@ -89,21 +89,38 @@ actor ScrobbleQueue {
             while true {
                 let batch = Array(items.filter { $0.svc == svc }.prefix(50))
                 if batch.isEmpty { break }
+                var done = Set<UUID>(), later = false
                 do {
                     try await send(svc, batch)
-                } catch let e as ScrobbleError where e.permanent {
-                    NSLog("LyricsBar: scrobble rejected by \(svc): \(e.message)")
-                } catch let e as SubsonicError where e.code != nil && e.code != 40 && e.code != 41 {
-                    // 40/41 = login problems (e.g. a changed password): keep those plays and retry later
-                    NSLog("LyricsBar: scrobble rejected by Subsonic: \(e.message)")
+                    done = Set(batch.map(\.id))
+                } catch where Self.rejected(error) && batch.count > 1 {
+                    // one bad play must not take the other 49 with it: send them one at a time
+                    for e in batch {
+                        do { try await send(svc, [e]); done.insert(e.id) }
+                        catch where Self.rejected(error) {
+                            NSLog("LyricsBar: scrobble rejected by \(svc): \(error.localizedDescription)")
+                            done.insert(e.id)
+                        } catch { later = true; break }
+                    }
+                } catch where Self.rejected(error) {
+                    NSLog("LyricsBar: scrobble rejected by \(svc): \(error.localizedDescription)")
+                    done = Set(batch.map(\.id))
                 } catch {
-                    break                       // offline or temporary: try again later
+                    later = true                // offline or temporary: try again later
                 }
-                let done = Set(batch.map(\.id))
                 items.removeAll { done.contains($0.id) }
                 save()
+                if later { break }
             }
         }
+    }
+
+    /// The service refused these plays for good (retrying won't help), as opposed to being unreachable.
+    private static func rejected(_ error: Error) -> Bool {
+        if let e = error as? ScrobbleError { return e.permanent }
+        // Subsonic 40/41 = login problems (e.g. a changed password): keep those plays and retry later
+        if let e = error as? SubsonicError, let c = e.code { return c != 40 && c != 41 }
+        return false
     }
 
     private func send(_ svc: String, _ b: [Entry]) async throws {

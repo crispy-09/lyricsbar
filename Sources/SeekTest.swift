@@ -140,7 +140,7 @@ enum SeekTest {
         }
         let params = AVMutableAudioMixInputParameters(track: track)
         params.audioTapProcessor = tapRef
-        let mix = AVMutableAudioMix(); mix.inputParameters = [params]
+        nonisolated(unsafe) let mix = AVMutableAudioMix(); mix.inputParameters = [params]
         let t0 = Date()
         let player = await MainActor.run { () -> AVPlayer in
             item.audioMix = mix

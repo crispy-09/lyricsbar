@@ -96,6 +96,8 @@ enum Subsonic {
         if json { q.append(URLQueryItem(name: "f", value: "json")) }
         q += params.map { URLQueryItem(name: $0.0, value: $0.1) }
         comps.queryItems = q
+        // URLComponents leaves "+" as it is, and servers read that as a space (searches, names, e-mail logins)
+        comps.percentEncodedQuery = comps.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         return comps.url
     }
 
@@ -109,6 +111,7 @@ enum Subsonic {
     /// `post`: send `params` as a form body (long lists, e.g. every song of a big playlist, can exceed URL limits).
     static func call(_ endpoint: String, _ params: [(String, String)] = [], auth a: SubsonicAuth? = nil,
                      post: Bool = false) async throws -> [String: Any] {
+        let post = post || params.count > 30       // long id lists (star, add to playlist, scrobble) don't fit a URL
         guard let u = url(endpoint, post ? [] : params, auth: a) else { throw SubsonicError(message: "Subsonic isn't set up") }
         var req = URLRequest(url: u, timeoutInterval: 20)
         req.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -171,6 +174,17 @@ enum Subsonic {
     static func albums(_ type: String = "alphabeticalByName", size: Int = 500, offset: Int = 0) async throws -> [SAlbum] {
         let r = try await call("getAlbumList2", [("type", type), ("size", String(size)), ("offset", String(offset))])
         return ((r["albumList2"] as? [String: Any])?["album"] as? [[String: Any]] ?? []).map(album)
+    }
+    /// Every album: the server returns at most 500 per request, so page through (up to 10,000).
+    static func allAlbums(_ type: String = "alphabeticalByName") async throws -> [SAlbum] {
+        if type == "random" { return try await albums(type) }       // each page would be a new shuffle
+        var all: [SAlbum] = [], seen = Set<String>()
+        for page in 0..<20 {
+            let part = try await albums(type, size: 500, offset: page * 500)
+            all += part.filter { seen.insert($0.id).inserted }
+            if part.count < 500 { break }
+        }
+        return all
     }
     static func albumDetail(_ id: String) async throws -> (SAlbum, [SSong]) {
         let r = try await call("getAlbum", [("id", id)])

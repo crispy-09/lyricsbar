@@ -1,13 +1,12 @@
 #!/usr/bin/python3
-"""Playlist providers for LyricsBar.
+"""Spotify and Apple Music helper for LyricsBar (Subsonic is handled in the app itself).
 
-  library.py providers                  -> [{"id","name","ready"}]
-  library.py playlists <provider>       -> [{"id","name","count"}]   (subsonic | spotify | applemusic)
-  library.py tracks subsonic <id>       -> [{"id","title","artist","album","duration","stream","cover"}]
+  library.py playlists <provider>       -> [{"id","name","count"}]   (spotify | applemusic)
   library.py queue spotify              -> [{"title","artist","album","uri","duration","image"}]
   library.py spotify-jump <uri> <index> -> skip forward to that queued song
   library.py spotify-queue-playlist <uri> -> add a playlist's songs (max 100) to the end of the queue
-  library.py spotify-replace <uri>...   -> replay current song + this list (remove / reorder)
+  library.py spotify-devices            -> [{"id","name","type","active"}]   (Spotify Connect)
+  library.py spotify-transfer <id>      -> move playback to that device
   library.py spotify-feed [--peek] <uri> -> make this song Spotify's next (--peek: only check); reports its first
   library.py spotify-login <client_id>  -> one-time Spotify sign-in (opens the browser)
 """
@@ -43,45 +42,6 @@ def cred(name):
     if not c:
         raise RuntimeError(f"{name.capitalize()} isn't connected. Connect it under Providers.")
     return c
-
-
-# ---------------- Subsonic / Navidrome ----------------
-
-def sub_cfg():
-    return cred("subsonic")
-
-
-def sub_url(endpoint, json_format=True, **params):
-    c = sub_cfg()
-    q = dict(u=c["u"], t=c["t"], s=c["s"], v="1.16.1", c="lyricsbar", **params)
-    if json_format:
-        q["f"] = "json"
-    return f'{c["server"]}/rest/{endpoint}?{urllib.parse.urlencode(q)}'
-
-
-def sub(endpoint, **params):
-    r = http_json(sub_url(endpoint, **params))["subsonic-response"]
-    if r.get("status") != "ok":
-        raise RuntimeError(r.get("error", {}).get("message", "subsonic error"))
-    return r
-
-
-def subsonic_playlists():
-    pls = sub("getPlaylists").get("playlists", {}).get("playlist", [])
-    return [{"id": p["id"], "name": p["name"], "count": p.get("songCount", 0)} for p in pls]
-
-
-def subsonic_tracks(pid):
-    entries = sub("getPlaylist", id=pid)["playlist"].get("entry", [])
-    out = []
-    for e in entries:
-        out.append({
-            "id": e["id"], "title": e.get("title", ""), "artist": e.get("artist", ""),
-            "album": e.get("album", ""), "duration": e.get("duration", 0),
-            "stream": sub_url("stream", json_format=False, id=e["id"]),
-            "cover": sub_url("getCoverArt", json_format=False, id=e.get("coverArt", e["id"]), size=300),
-        })
-    return out
 
 
 # ---------------- Spotify (Web API for listing, Spotify.app for playback) ----------------
@@ -360,87 +320,6 @@ def _queue_uris():
     return [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t]
 
 
-def spotify_replace(uris, keep_current=True):
-    """Set Up Next to exactly `uris` (empty = clear), keeping the current song where it is.
-    keep_current=False is used at the end of a song (and for Play Now): play `uris` straight away instead,
-    or stop if it's empty.
-
-    Spotify's Web API can only add to the queue. Songs added with "Add to queue" sit in a separate queue
-    that survives starting new music, so replaying a new list alone doesn't remove them. So, with Spotify
-    muted: skip through everything queued (that empties it), start the current song again followed by the
-    new list, seek back to the same spot, then unmute (and pause again if it was paused)."""
-    if len(uris) > 100 or not all(SPOTIFY_URI.match(u) for u in uris):
-        raise RuntimeError("invalid song list")
-    st = spotify_api("GET", "/me/player")
-    if not st or not st.get("item") or not st.get("device"):
-        raise RuntimeError("Spotify isn't playing on any device right now")
-    playing = bool(st.get("is_playing"))
-    dev = urllib.parse.quote(st["device"].get("id") or "", safe="")
-    cur = st["item"].get("uri") or ""
-    if not SPOTIFY_URI.match(cur):                          # check before touching anything
-        raise RuntimeError("Spotify can't re-queue the song that's playing (a local file), so Up Next can't be edited now")
-    pos = st.get("progress_ms") or 0
-    t0 = time.time()
-    vol = _spotify_volume(st, dev)
-    if vol is not None:                                    # never mute without knowing what to restore
-        _spotify_volume(st, dev, 0)
-    skipped = played = done = False                        # how far the edit got, for putting things back if it fails
-    try:
-        if st.get("shuffle_state"):                        # a shuffled list would scramble the new order
-            spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
-        # cleared at the end of a song: nothing follows, so leave the finished song stopped at its start
-        play = ([cur] + uris) if keep_current or not uris else uris
-        for _ in range(3):                                 # the queue listing shows at most ~20 songs at a time
-            q = _queue_uris()
-            if q:
-                skipped, played = True, False
-                _spotify_skip(st, len(q))
-                time.sleep(0.4)
-            spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": play})
-            played = True
-            time.sleep(0.6)
-            after, rest = _queue_uris(), play[1:]
-            # done once Up Next starts with the new list (or, for a clear, holds none of the songs we skipped)
-            if (rest and after[:3] == rest[:3]) or (not rest and not set(after[:5]) & set(q)):
-                break
-        else:
-            raise RuntimeError("Spotify didn't take that change. Try again")
-        if not keep_current and not uris:
-            spotify_api("PUT", f"/me/player/pause?device_id={dev}")
-            playing = True                                 # already paused on purpose
-            spotify_api("PUT", f"/me/player/seek?position_ms=0&device_id={dev}")
-        elif keep_current:
-            # the desktop app ignores position_ms and restarts the song, so seek back to where it was
-            # (plus the time this took, if it was playing)
-            now = pos + (int((time.time() - t0) * 1000) if playing else 0)
-            spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
-        done = True
-    finally:
-        try:
-            if not done and (skipped or played):
-                # the edit failed part-way: the song was skipped away from or started again from 0:00.
-                # Put it back where it was before the sound returns (best effort).
-                try:
-                    if not played:
-                        spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": [cur]})
-                        time.sleep(0.4)
-                    now = pos + (int((time.time() - t0) * 1000) if playing else 0)
-                    spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
-                except Exception:
-                    pass
-            # whatever happened, a song that was paused must not come back playing out loud
-            if not playing:
-                try:
-                    spotify_api("PUT", f"/me/player/pause?device_id={dev}")
-                except Exception:                          # offline raises URLError: still unmute below
-                    pass
-        finally:
-            if vol is not None:
-                time.sleep(0.4)                            # let the seek/pause land before the sound comes back
-                _spotify_unmute(st, dev, vol)
-    return {"count": len(uris)}
-
-
 def spotify_login(client_id):
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
@@ -520,22 +399,11 @@ end tell"""
     return out
 
 
-def providers():
-    return [
-        {"id": "subsonic", "name": "Subsonic", "ready": bool(CREDS.get("subsonic"))},
-        {"id": "spotify", "name": "Spotify", "ready": bool(CREDS.get("spotify"))},
-    ]
-
-
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
     load_creds()
     try:
-        if cmd == "providers":
-            res = providers()
-        elif cmd == "playlists" and argv[2] == "subsonic":
-            res = subsonic_playlists()
-        elif cmd == "playlists" and argv[2] == "spotify":
+        if cmd == "playlists" and argv[2] == "spotify":
             res = spotify_playlists()
         elif cmd == "playlists" and argv[2] == "applemusic":
             res = applemusic_playlists()
@@ -552,11 +420,6 @@ def main(argv):
         elif cmd == "spotify-feed":
             peek = argv[2] == "--peek"                       # only look: is this song Spotify's next already?
             res = spotify_feed(argv[3] if peek else argv[2], peek)
-        elif cmd == "spotify-replace":
-            start = len(argv) > 2 and argv[2] == "--start"   # start the list now instead of keeping the current song
-            res = spotify_replace(argv[3:] if start else argv[2:], keep_current=not start)
-        elif cmd == "tracks" and argv[2] == "subsonic":
-            res = subsonic_tracks(argv[3])
         elif cmd == "spotify-login":
             return spotify_login(argv[2])
         else:

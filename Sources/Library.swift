@@ -280,6 +280,29 @@ struct NowPlayingBar: View {
 
 // MARK: - Shared song list
 
+/// A failed load must not look like an empty library: shows the reason at the top of the page.
+extension View {
+    func loadError(_ error: String?) -> some View {
+        overlay(alignment: .top) {
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.regularMaterial, in: SwiftUI.Capsule())
+                    .foregroundStyle(.red).padding(.top, 10)
+            }
+        }
+    }
+}
+
+/// For menu actions: runs it, and says so on the Touch Bar if the server refused or couldn't be reached.
+@discardableResult
+func libraryTry<T>(_ what: String, _ op: () async throws -> T) async -> T? {
+    do { return try await op() } catch {
+        NotificationCenter.default.post(name: .lyricsBarToast, object: "Couldn't \(what): \(error.localizedDescription)")
+        return nil
+    }
+}
+
 struct SongActions {
     static func menu(_ songs: [SSong], all: [SSong], index: Int) -> some View {
         Group {
@@ -288,8 +311,8 @@ struct SongActions {
             Button("Add to Queue") { queueLater(songs) }
             AddToPlaylistMenu(songs: songs)
             Divider()
-            Button("Add to Liked Songs") { Task { try? await Subsonic.star(songs.map(\.id)); LikedModel.shared.reload() } }
-            Button("Remove from Liked Songs") { Task { try? await Subsonic.unstar(songs.map(\.id)); LikedModel.shared.reload() } }
+            Button("Add to Liked Songs") { Task { await libraryTry("like that") { try await Subsonic.star(songs.map(\.id)) }; LikedModel.shared.reload() } }
+            Button("Remove from Liked Songs") { Task { await libraryTry("unlike that") { try await Subsonic.unstar(songs.map(\.id)) }; LikedModel.shared.reload() } }
         }
     }
 }
@@ -343,7 +366,7 @@ struct AddToPlaylistMenu: View {
     var body: some View {
         Menu("Add to Playlist") {
             ForEach(playlists) { p in
-                Button(p.name) { Task { try? await Subsonic.add(p.id, songs: songs.map(\.id)) } }
+                Button(p.name) { Task { await libraryTry("add to \(p.name)") { try await Subsonic.add(p.id, songs: songs.map(\.id)) } } }
             }
         }
         .task { playlists = (try? await Subsonic.playlists()) ?? [] }
@@ -423,10 +446,10 @@ struct AlbumCell: View {
         }
         .frame(width: 150)
         .contextMenu {
-            Button("Play") { Task { if let s = try? await Subsonic.albumDetail(album.id).1 { playSongs(s) } } }
-            Button("Shuffle") { Task { if let s = try? await Subsonic.albumDetail(album.id).1 { playSongs(s, shuffle: true) } } }
-            Button("Play Next") { Task { if let s = try? await Subsonic.albumDetail(album.id).1 { queueNext(s) } } }
-            Button("Add to Queue") { Task { if let s = try? await Subsonic.albumDetail(album.id).1 { queueLater(s) } } }
+            Button("Play") { Task { if let s = await libraryTry("load that album", { try await Subsonic.albumDetail(album.id).1 }) { playSongs(s) } } }
+            Button("Shuffle") { Task { if let s = await libraryTry("load that album", { try await Subsonic.albumDetail(album.id).1 }) { playSongs(s, shuffle: true) } } }
+            Button("Play Next") { Task { if let s = await libraryTry("load that album", { try await Subsonic.albumDetail(album.id).1 }) { queueNext(s) } } }
+            Button("Add to Queue") { Task { if let s = await libraryTry("load that album", { try await Subsonic.albumDetail(album.id).1 }) { queueLater(s) } } }
         }
     }
 }
@@ -461,7 +484,7 @@ struct AlbumsView: View {
             }
         }
         .task(id: sort) {
-            do { albums = try await Subsonic.albums(sort); error = nil } catch { self.error = error.localizedDescription }
+            do { albums = try await Subsonic.allAlbums(sort); error = nil } catch { self.error = error.localizedDescription }
         }
     }
 }
@@ -469,6 +492,7 @@ struct AlbumsView: View {
 struct AlbumDetail: View {
     let album: SAlbum
     @State private var songs: [SSong] = []
+    @State private var error: String?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -493,12 +517,14 @@ struct AlbumDetail: View {
             .padding(24)
         }
         .navigationTitle(album.name)
-        .task { songs = (try? await Subsonic.albumDetail(album.id).1) ?? [] }
+        .loadError(error)
+        .task { do { songs = try await Subsonic.albumDetail(album.id).1; error = nil } catch { self.error = error.localizedDescription } }
     }
 }
 
 struct ArtistsView: View {
     @State private var artists: [SArtist] = []
+    @State private var error: String?
     @State private var filter = ""
     var shown: [SArtist] { filter.isEmpty ? artists : artists.filter { $0.name.localizedCaseInsensitiveContains(filter) } }
     var body: some View {
@@ -514,13 +540,15 @@ struct ArtistsView: View {
         }
         .searchable(text: $filter, prompt: "Filter artists")
         .navigationTitle("Artists")
-        .task { artists = (try? await Subsonic.artists()) ?? [] }
+        .loadError(error)
+        .task { do { artists = try await Subsonic.artists(); error = nil } catch { self.error = error.localizedDescription } }
     }
 }
 
 struct ArtistDetail: View {
     let artist: SArtist
     @State private var albums: [SAlbum] = []
+    @State private var error: String?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -534,11 +562,15 @@ struct ArtistDetail: View {
             .padding(24)
         }
         .navigationTitle(artist.name)
-        .task { albums = (try? await Subsonic.artistAlbums(artist.id)) ?? [] }
+        .loadError(error)
+        .task { do { albums = try await Subsonic.artistAlbums(artist.id); error = nil } catch { self.error = error.localizedDescription } }
     }
     func playAll(shuffle: Bool) async {
         var all: [SSong] = []
-        for a in albums { all += (try? await Subsonic.albumDetail(a.id).1) ?? [] }
+        for a in albums {
+            guard let s = await libraryTry("load \(a.name)", { try await Subsonic.albumDetail(a.id).1 }) else { return }
+            all += s
+        }
         playSongs(all, shuffle: shuffle)
     }
 }
@@ -585,8 +617,8 @@ struct PlaylistsView: View {
                         }
                     }
                     .contextMenu {
-                        Button("Play") { Task { if let s = try? await Subsonic.playlist(p.id).1 { playSongs(s) } } }
-                        Button("Shuffle") { Task { if let s = try? await Subsonic.playlist(p.id).1 { playSongs(s, shuffle: true) } } }
+                        Button("Play") { Task { if let s = await libraryTry("load that playlist", { try await Subsonic.playlist(p.id).1 }) { playSongs(s) } } }
+                        Button("Shuffle") { Task { if let s = await libraryTry("load that playlist", { try await Subsonic.playlist(p.id).1 }) { playSongs(s, shuffle: true) } } }
                         Divider()
                         Button(store.isPinned("subsonic", p.id) ? "Unpin from Touch Bar" : "Pin to Touch Bar") {
                             store.togglePin("subsonic", p.id, p.name)
@@ -629,8 +661,12 @@ struct PlaylistDetail: View {
     @State private var songs: [SSong] = []
     @State private var editing = false
     @State private var deleted = false
+    @State private var error: String?
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var store = ConfigStore.shared
+    func load() async {
+        do { songs = try await Subsonic.playlist(playlist.id).1; error = nil } catch { self.error = error.localizedDescription }
+    }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -658,9 +694,10 @@ struct PlaylistDetail: View {
             .padding(24)
         }
         .navigationTitle(playlist.name)
-        .task { songs = (try? await Subsonic.playlist(playlist.id).1) ?? [] }
+        .loadError(error)
+        .task { await load() }
         .sheet(isPresented: $editing, onDismiss: {
-            if deleted { dismiss() } else { Task { songs = (try? await Subsonic.playlist(playlist.id).1) ?? [] } }
+            if deleted { dismiss() } else { Task { await load() } }
         }) {
             PlaylistEditor(playlistId: playlist.id, onDeleted: { deleted = true }) { editing = false }
         }
@@ -675,6 +712,7 @@ struct SearchView: View {
     @State private var albums: [SAlbum] = []
     @State private var artists: [SArtist] = []
     @State private var searching = false
+    @State private var error: String?
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -703,14 +741,21 @@ struct SearchView: View {
             }
             .padding(24)
         }
+        .loadError(error)
         .searchable(text: $query, placement: .toolbar, prompt: "Songs, albums, artists")
         .navigationTitle("Search")
         .task(id: query) {
             let q = query.trimmingCharacters(in: .whitespaces)
             guard !q.isEmpty else { songs = []; albums = []; artists = []; return }
             try? await Task.sleep(nanoseconds: 300_000_000)   // debounce typing
-            guard !Task.isCancelled, let r = try? await Subsonic.searchAll(q) else { return }
-            songs = r.songs; albums = r.albums; artists = r.artists
+            guard !Task.isCancelled else { return }
+            do {
+                let r = try await Subsonic.searchAll(q)
+                guard !Task.isCancelled else { return }
+                songs = r.songs; albums = r.albums; artists = r.artists; error = nil
+            } catch {
+                if !Task.isCancelled && (error as? URLError)?.code != .cancelled { self.error = error.localizedDescription }
+            }
         }
     }
 }

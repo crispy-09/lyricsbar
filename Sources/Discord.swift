@@ -76,6 +76,14 @@ final class DiscordPresence: ObservableObject {
         return out
     }
 
+    static func isBrowser(_ bundle: String) -> Bool {
+        let b = bundle.lowercased()
+        return ["com.apple.safari", "com.apple.webkit", "com.google.chrome", "org.chromium", "org.mozilla", "company.thebrowser",
+                "com.microsoft.edgemac", "com.brave.browser", "com.operasoftware", "com.vivaldi", "app.zen-browser",
+                "com.kagi.kagimacos", "org.torproject", "net.imput.helium", "ai.perplexity.comet", "com.openai.atlas"]
+            .contains { b.hasPrefix($0) }
+    }
+
     /// Discord wants 2–128 characters per text field.
     private static func field(_ s: String) -> String? {
         let t = s.trimmingCharacters(in: .whitespaces)
@@ -91,6 +99,8 @@ final class DiscordPresence: ObservableObject {
         case "noSpotify": if s.bundle == "com.spotify.client" { return nil }   // Spotify shows its own presence
         default: break
         }
+        // a browser's Now Playing is whatever tab makes sound (videos, calls): not for a public profile unless asked
+        if !c.discordBrowsers, Self.isBrowser(s.bundle) { return nil }
         if !s.playing && c.discordWhenPaused == "hide" { return nil }
         var a: [String: Any] = ["type": c.discordType == "playing" ? 0 : 2]
         // "Listening to <name>": Vesktop/arRPC uses this name if given, else your Discord application's name

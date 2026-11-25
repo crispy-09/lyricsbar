@@ -29,6 +29,14 @@ if [[ -L "$STABLE" ]]; then
   [[ "$(readlink "$STABLE")" == *Beta* ]] && WAS_BETA=1
 fi
 
+# what it needs, before touching anything
+if ! xcrun --find swiftc >/dev/null 2>&1; then
+  echo "error: the Swift compiler is missing. Install the Xcode Command Line Tools first: xcode-select --install" >&2; exit 1
+fi
+if [[ ! -x /usr/bin/python3 ]] || ! /usr/bin/python3 -c 1 2>/dev/null; then
+  echo "error: /usr/bin/python3 is missing. Install the Xcode Command Line Tools first: xcode-select --install" >&2; exit 1
+fi
+
 mkdir -p "$DATA" "$APPS" "$HOME/Library/LaunchAgents"
 chmod 700 "$DATA"
 
@@ -73,5 +81,11 @@ if [[ -n "$OLD" ]]; then echo "LyricsBar updated ($OLD → $NEWV). Your settings
 else echo "LyricsBar $NEWV installed. Hold the album art on the Touch Bar to open Settings."; fi
 if [[ "$(readlink "$ACTIVE")" == *Beta* ]]; then
   echo "note: you're running the Beta build; switch with: ~/.touchbar-lyrics/switch.sh stable"
+fi
+if [[ ! -x /opt/homebrew/bin/media-control && ! -x /usr/local/bin/media-control ]] && ! command -v media-control >/dev/null 2>&1; then
+  echo ""
+  echo "WARNING: media-control isn't installed, so LyricsBar can't see what's playing (no song info, no lyrics)."
+  echo "         Install it with: brew install media-control   (LyricsBar picks it up by itself)"
+  echo ""
 fi
 echo "If macOS asks for your Keychain password, choose \"Always Allow\" (LyricsBar waits for that before loading your logins)."

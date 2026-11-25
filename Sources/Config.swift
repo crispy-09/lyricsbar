@@ -81,6 +81,7 @@ struct Config: Codable, Equatable {
     var discordTimestamps = true      // progress bar / time left
     var discordWhenPaused = "hide"    // "hide" | "show"
     var discordPlayers = "noSpotify"  // "all" | "own" | "noSpotify" (Spotify already shows its own presence)
+    var discordBrowsers = false       // also publish what plays in a web browser (any video or tab, not just music)
     var discordAlbumArt = false       // look up cover art on Apple's public iTunes Search
     var discordImage = ""             // fallback picture: an asset name from your Discord app, or an https URL
     var discordStatusDisplay = "app"  // member list says "Listening to <app name | line 1 | line 2>"

@@ -1408,6 +1408,7 @@ final class BarView: NSView {
     /// Keyboard light, Siri, Screenshot and regular-bar live behind the ‹ button so the bar stays roomy.
     var forceLeft = false                    // the strip is expanded: lyrics move to the left edge
     var onRegularBar: (() -> Void)?
+    var onRecheckState: (() -> Void)?        // read the real play state again (after an optimistic change)
     var anyStripButton: Bool {
         StripSlot.normalized(cfg.stripLayout).contains { $0.place != "off" && ($0.id != "keyboard" || KeyboardLight.available) }
     }
@@ -2774,6 +2775,8 @@ final class BarView: NSView {
         }
         setPlaying(!isPlaying)  // optimistic; state.json confirms
         transport(.toggle)
+        // a player that ignored the press never reports a change, which would leave the button wrong: look again
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.onRecheckState?() }
     }
     @objc func prev() { bumpMediaTimer(); transport(.previous) }
     @objc func next() { bumpMediaTimer(); transport(.next) }
@@ -3112,6 +3115,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         let tray = NSCustomTouchBarItem(identifier: trayId)
         tray.view = ControlStripButton(coloredSymbol("music.note", 15, .white), self, #selector(showOnBar))
         view.onRegularBar = { [weak self] in self?.setBarHidden(true) }
+        view.onRecheckState = { [weak self] in self?.lastState = Data() }
         view.peekNext = { [weak self] done in self?.fetchNext(done) ?? done(nil) }
         addSystemTrayItem(tray)
         dfrSetControlStripPresence(trayId.rawValue, true)
@@ -3649,13 +3653,15 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     }
 
     var vizIdleSince: Date?
+    var vizFailed: (src: AudioTap.Source, at: Date)?
     var vizTimer: Timer?
 
     /// Run the audio tap only while something plays and a visualizer style is on.
     func driveVisualizer() {
         let tap = AudioTap.shared
         tap.sensitivity = Float(cfg.visualizerSensitivity)
-        let want = cfg.visualizerStyle != "off" && view.isPlaying
+        // nothing to draw on while the regular Touch Bar shows
+        let want = cfg.visualizerStyle != "off" && view.isPlaying && !cfg.barHidden
         // listen at the source: LyricsBar's own stream, or just the app that's playing
         let own = ownPlayerInCharge()
         let src: AudioTap.Source = own ? .own : .app(systemState().bundle)
@@ -3664,7 +3670,12 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             vizIdleSince = nil
             if tap.running && tap.source != src { tap.start(src) }     // switch source without restarting the timer
             if !tap.running {
+                // a tap that can't be set up (no permission, the app has no audio yet) fails the same way
+                // every tick: try a source again only after a pause
+                if let f = vizFailed, f.src == src, Date().timeIntervalSince(f.at) < 10 { return }
                 tap.start(src)
+                guard tap.running else { vizFailed = (src, Date()); return }
+                vizFailed = nil
                 vizTimer?.invalidate()
                 let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
                     guard let self else { return }
@@ -3677,7 +3688,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             }
         } else if tap.running {
             if vizIdleSince == nil { vizIdleSince = Date() }
-            if Date().timeIntervalSince(vizIdleSince!) > 4 || cfg.visualizerStyle == "off" {
+            if Date().timeIntervalSince(vizIdleSince!) > 4 || cfg.visualizerStyle == "off" || cfg.barHidden {
                 tap.stop(); vizTimer?.invalidate(); vizTimer = nil
                 view.vizBG.update([0]); view.vizCompact.update([0])
             }
@@ -3685,6 +3696,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     }
 }
 
+signal(SIGHUP, SIG_IGN)            // the debug hook's signal must not kill a LyricsBar that is still starting up
 let app = NSApplication.shared
 let delegate = App()
 app.delegate = delegate

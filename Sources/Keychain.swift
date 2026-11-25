@@ -88,7 +88,7 @@ enum Creds {
 
     /// Credentials the Python helper needs, passed on its stdin (never on the command line or in files).
     static var forHelper: Data {
-        let pick = all.filter { ["subsonic", "spotify"].contains($0.key) }
+        let pick = all.filter { $0.key == "spotify" }       // the helper only talks to Spotify: nothing else leaves the app
         return (try? JSONSerialization.data(withJSONObject: pick)) ?? Data("{}".utf8)
     }
 

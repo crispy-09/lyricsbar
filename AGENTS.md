@@ -31,7 +31,7 @@ Notes for coding agents (and humans) working on LyricsBar.
   - `songChanged` (confirmed with the Spotify app via `appState`, since Now Playing has fired false alarms): the fed song or the list's first → pop it; a recently played song → keep the list; Spotify's own next (`realNext`) or a song that just ended → switch to the list's first (`play`, which retries via `confirmStarted`); anything else is other music → `release()`.
   - `handleNext()` (from `transport(.next)`) plays the list's first song directly unless Spotify already has it as its next. `clear` empties the list and pauses at the end of the song (`stopAfter`).
   - `release()` gives Up Next back to Spotify: list ran out, other music, another player for 5 s, a playlist picked or queued from the bar, Reset in the Library. The list is saved to `spotify-pending.json` and restored at launch if the same song is still playing (with `boundary` set). Decisions go to `~/.touchbar-lyrics/spotify-queue.log` (song names only, last 200 lines).
-  - Before any edit, "Play Now" still uses `library.py spotify-jump` (skips inside Spotify's own queue, muted). `spotify_replace` in `library.py` (the old mute-skip-replay edit) is no longer called by the app.
+  - Before any edit, "Play Now" still uses `library.py spotify-jump` (skips inside Spotify's own queue, muted).
   - `library.py` uses AppleScript (volume, `next track`) only when the active device is this Mac's Spotify app (`_spotify_local`), never launching it; otherwise the Web API.
   - While the bar's Up Next shows Spotify, `followSpotifyQueue()` reloads it on song change and every 6 s.
   - `QueueStrip.onClear`: swiping right at the start of the list reveals a red Clear pill.
@@ -51,7 +51,7 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `Resources/`: `Info.plist` (bump `CFBundleShortVersionString` for releases; `install.sh` prints old → new) and `AppIcon.icns`.
   - The icon is drawn in code by `Resources/icon/make_icon.swift`. Regenerate the `.icns` with `Resources/icon/make_icns.sh`.
 - `build.sh` builds into `<name>.building.app` and swaps it in only on success. `install.sh` is also the updater: it never touches `~/.touchbar-lyrics` data or the Keychain, and it remembers the signing identity in `~/.touchbar-lyrics/sign-id`.
-- `scripts/library.py`: the playlist CLI the app calls.
+- `scripts/library.py`: the Spotify and Apple Music helper the app calls (Subsonic is done in Swift, `Subsonic.swift`). It only gets the Spotify login.
   - It gets credentials as JSON on **stdin** and returns refreshed tokens as `{"__result": …, "__creds": …}`.
   - It must never write credentials to disk.
 
@@ -88,7 +88,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `discordtest <socket>` / `discordtest off` | Turn presence on against a fake Discord socket (test app ID), then back off. This changes the config, so always run `off` afterwards |
 | `discordpreview` | Write the activity that would be sent, plus the status |
 | `spq`, `spq state`, `spq next`, `spq skip N`, `spq remove N`, `spq move A B`, `spq clear` | Read or edit Spotify's Up Next through `SpotifyQueue` (`next` = Next as pressed in LyricsBar), then write its state and the queue to `debug.out`. **Edits change real playback.** Spotify must be playing, because its API returns an empty queue for an idle device |
-| `cast`, `cast self`, `cast ax`, `cast cc` | `cast ax` writes whether the Accessibility permission is there; `cast cc` presses Control Center's sound list open (a second time closes it) whatever is playing.  With anything but Spotify playing, `cast` opens Control Center's sound list (`ControlCenterSound`: AXPress on `com.apple.menuextra.sound`, or on `com.apple.menuextra.controlcenter` (owned by `com.apple.MenuBarAgent` on macOS 26+) and then `controlcenter-airplay`; needs Accessibility). Without that permission the own player falls back to Apple's AirPlay menu (`AirPlayMenu`, an invisible `AVRoutePickerView` that gets clicked; `StreamPlayer.shareRoute` copies the private `outputContext` to the second player every 0.25 s). Otherwise `cast` opens the Cast list (Spotify Connect devices, `library.py spotify-devices`) and writes what it shows; `cast self` sends `spotify-transfer` for the device that's already active (a harmless check of the call). Tapping another device moves real playback to a real speaker: don't test that unasked  `AudioOutput` (AirPlay.swift) polls every 2 s whether the sound goes to an AirPlay device (system output transport, or the own player's `isExternalPlaybackActive`) and writes `output.json`; lyricsd and the Library's lyrics view then subtract `airplayLyricDelay` (AirPlay devices report no latency to CoreAudio) |
+| `cast`, `cast self`, `cast ax`, `cast cc` | `cast` presses the Cast button: with Spotify playing it opens the Cast list (Spotify Connect devices, `library.py spotify-devices`) and writes what it shows; with anything else it opens Control Center's sound list. `cast self` sends `spotify-transfer` for the device that's already active (a harmless check of the call). `cast ax` writes whether the Accessibility permission is there. `cast cc` presses Control Center's sound list open whatever is playing (a second time closes it). Tapping another device in either list moves real playback to a real speaker: don't test that unasked |
 | `spqpl`, `spqpl N` | List Spotify playlists, or queue playlist N (the picker's hold action). **This changes the real queue**, so use a small playlist |
 | `regular on` / `regular off` | Hand the Touch Bar to macOS (as the strip's "regular Touch Bar" button does) / take it back |
 | `playingshows lyrics\|controls\|title`, `buttons on\|off`, `kbd`, `more` (toggle the ‹ extras), `outro` (show Up Next now with a sample next song), `swipe DX [back]` (simulated drag on the lyric; `back` returns to the middle), `lyricstate` (lyric label state to debug.out) | Set what the bar shows while playing; show/hide all optional strip buttons (keyboard light, Siri, Screenshot, regular bar); read the keyboard backlight. These change the config |
@@ -105,7 +105,7 @@ Screenshots:
 - **Never loop `pkill -HUP`** while the app may be (re)starting. A SIGHUP that arrives before the handler is installed kills it (exit 129), and launchd crash-loops.
 - **Don't drive playback through `transport()` in tests.** It controls whichever app is Now Playing, which could be the user's Spotify or Music. Call `StreamPlayer` directly with `testMuted = true` (as `mutedtest` does).
 - **Don't start audible playback** or send real scrobbles without asking the user.
-- **Don't test Spotify queue edits (`spotify-jump` / `spotify-replace`) on the user's account.** They change real playback.
+- **Don't test Spotify queue edits (`spotify-jump`, `spotify-feed`, the `spq` hooks) on the user's account.** They change real playback.
 - **Apps can't keep the Touch Bar awake.** TouchBarServer (root) turns it off ~75 s after the last *hardware* input. Tried and failed: `IOPMAssertionDeclareUserActivity` (keeps the screen on only), `DFRSetStatus(1)` (ignored), synthetic `CGEvent`s (reset `HIDIdleTime` but not the bar's timer), and CoreBrightness `suspendIdleDimming` (keyboard backlight only). The old "Touch Bar sleep" setting was removed for this reason.
 - **No top-level `let`/`var` after the run loop starts in `main.swift`.** Code below `app.run()` never runs, so such a global stays uninitialised and crashes when read. Put constants in a type's `static let`.
 
@@ -131,3 +131,11 @@ Screenshots:
 - Files in `~/.touchbar-lyrics` must not contain secrets. The directory is mode 700.
 - Build AppleScript and Spotify URIs only from sanitised IDs (`spotifySafe()`), never from raw names.
 - Never commit anything from `~/.touchbar-lyrics`: config, queue, state, cache, logs, or signing keys.
+
+## Cast and audio output (`Sources/AirPlay.swift`)
+
+- **Spotify**: `BarView.openCast` lists Spotify Connect devices in the picker (`spotify-devices`) and moves playback with `spotify-transfer`. Spotify's API only lists devices the account has used; speakers the Spotify app finds on the network don't appear.
+- **Anything else**: `ControlCenterSound.open` presses Control Center's sound list open through Accessibility: `com.apple.menuextra.sound` if it's in the menu bar, otherwise `com.apple.menuextra.controlcenter` (owned by `com.apple.MenuBarAgent` on macOS 26+) and then `controlcenter-airplay`. From the sound list a second press closes it (the menu bar item steps back one page per press).
+- **Without the Accessibility permission**, the own player falls back to `AirPlayMenu`: an invisible `AVRoutePickerView` that gets clicked, which routes only that player. `StreamPlayer.shareRoute` copies the private `outputContext` to the second (crossfade) player every 0.25 s.
+- **A permission given through the system dialog was pinned to one build** (TCC stored a cdhash); removing the entry and adding the app with + stored the signing requirement instead and survives rebuilds.
+- **`AudioOutput`** polls every 2 s whether the sound goes to an AirPlay device (the system output's transport type, or the own player's `isExternalPlaybackActive`) and writes `output.json`. lyricsd and the Library's lyrics view then subtract `airplayLyricDelay`: AirPlay devices report no latency to CoreAudio.

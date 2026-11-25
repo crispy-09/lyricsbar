@@ -401,7 +401,7 @@ func attachVisualizerTap(to item: AVPlayerItem) {
               let tapRef else { Unmanaged<OwnTapInfo>.fromOpaque(info).release(); return }
         let p = AVMutableAudioMixInputParameters(track: track)
         p.audioTapProcessor = tapRef
-        let mix = AVMutableAudioMix()
+        nonisolated(unsafe) let mix = AVMutableAudioMix()      // made here, used only on the main actor from now on
         mix.inputParameters = [p]
         await MainActor.run { item.audioMix = mix }
     }
