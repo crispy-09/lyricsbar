@@ -128,6 +128,19 @@ def _parse_ts(ts):
     except Exception:
         return None
 
+def _times(p):
+    """(elapsed, anchor, duration): elapsed was the position at time `anchor`.
+    With --micros the timestamp is exact; the plain one only has 1 s resolution, so fresh events are
+    anchored at arrival instead (which runs late by however long the event took to arrive)."""
+    now = time.time()
+    if "elapsedTimeMicros" in p or "timestampEpochMicros" in p or "durationMicros" in p:
+        ts = p.get("timestampEpochMicros")
+        return (float(p.get("elapsedTimeMicros") or 0) / 1e6, min(now, float(ts) / 1e6) if ts else now,
+                float(p.get("durationMicros") or 0) / 1e6)
+    ts = _parse_ts(p.get("timestamp", ""))
+    return (float(p.get("elapsedTime") or 0), now if ts is None or now - ts < 1.5 else ts + 0.5,
+            float(p.get("duration") or 0))
+
 STATE = os.path.join(HOME, "state.json")
 ART = os.path.join(HOME, "artwork.jpg")
 
@@ -148,11 +161,8 @@ def _publish(p, last_art):
             last_art = art_key                   # only mark done once art is written
         except Exception:
             pass
-    now, ts = time.time(), _parse_ts(p.get("timestamp", ""))
-    info["elapsed"] = float(p.get("elapsedTime") or 0)
-    info["anchor"] = now if ts is None or now - ts < 1.5 else ts + 0.5
+    info["elapsed"], info["anchor"], info["duration"] = _times(p)
     info["rate"] = float(p.get("playbackRate") or 1) if info["playing"] else 0.0
-    info["duration"] = float(p.get("duration") or 0)
     info["artwork"] = ART if os.path.exists(ART) else ""
     with open(STATE + ".tmp", "w") as f:
         json.dump(info, f)
@@ -162,12 +172,14 @@ def _publish(p, last_art):
 def _stream():
     """Follow the system Now Playing feed (works for Spotify, Music, browsers, any player...)."""
     last_key, last_art = None, None
+    micros = True                                # exact timestamps; dropped if this media-control can't do them
     while True:
-        proc = None
+        proc, got = None, False
         try:
-            proc = subprocess.Popen([MEDIA_CONTROL, "stream", "--no-diff"],
+            proc = subprocess.Popen([MEDIA_CONTROL, "stream", "--no-diff"] + (["--micros"] if micros else []),
                                     stdout=subprocess.PIPE, text=True)
             for line in proc.stdout:
+                got = True
                 try:
                     msg = json.loads(line)
                     p = (msg.get("payload") if isinstance(msg, dict) else None) or {}
@@ -182,18 +194,16 @@ def _stream():
                     continue
                 paused = not p.get("playing")        # keep the song while paused so its lyric line stays up
                 # the rate matters too: buffering (0) → playing (1) at the same position must restart the clock
-                key = (p.get("title"), p.get("artist"), p.get("elapsedTime"), p.get("timestamp"), paused, p.get("playbackRate"))
+                key = (p.get("title"), p.get("artist"), p.get("elapsedTimeMicros", p.get("elapsedTime")),
+                       p.get("timestampEpochMicros", p.get("timestamp")), paused, p.get("playbackRate"))
                 if key == last_key:
                     continue
                 last_key = key
                 now = time.time()
-                ts = _parse_ts(p.get("timestamp", ""))
-                # timestamp only has 1s resolution: trust arrival time for fresh events
-                anchor = now if ts is None or now - ts < 1.5 else ts + 0.5
                 try:
+                    position, anchor, duration = _times(p)
                     st = dict(track=p["title"], artist=p.get("artist", ""), bundle=p.get("bundleIdentifier", ""),
-                              album=p.get("album", ""), duration=float(p.get("duration") or 0),
-                              position=float(p.get("elapsedTime") or 0),
+                              album=p.get("album", ""), duration=duration, position=position,
                               rate=0.0 if paused else float(p.get("playbackRate") or 1))
                 except (TypeError, ValueError):
                     continue
@@ -213,6 +223,8 @@ def _stream():
                     proc.kill(); proc.wait(timeout=5)
                 except Exception:
                     pass
+            if micros and not got:
+                micros = False                   # an older media-control without --micros: plain timestamps
         time.sleep(2)
 
 CLOCK = os.path.join(HOME, "clock.json")
@@ -229,8 +241,10 @@ def _own_clock():
         try:
             with open(CLOCK) as f:
                 c = json.load(f)
-            _clock["value"] = (c["bundle"], c["title"], float(c["position"]), float(c["at"]), float(c["rate"]))
-        except (OSError, ValueError, KeyError, TypeError):
+            _clock["value"] = dict(bundle=c["bundle"], track=c["title"], artist=c["artist"],
+                                   album=c.get("album", ""), duration=float(c.get("duration") or 0),
+                                   position=float(c["position"]), at=float(c["at"]), rate=float(c["rate"]))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
             _clock["value"] = None
     return _clock["value"]
 
@@ -241,9 +255,13 @@ def now_playing():
             return None
         st = dict(st)
         st["position"] += (time.time() - _np["anchor"]) * st["rate"]
-    c = _own_clock()
-    if c and c[0] and c[0] == st.get("bundle") and c[1] == st["track"]:
-        st["position"] = c[2] + (time.time() - c[3]) * c[4]   # it's LyricsBar playing: use its own clock
+    c, now = _own_clock(), time.time()
+    # LyricsBar is the Now Playing app: its own clock is the truth (song included: Now Playing lags behind
+    # on song changes and crossfades too). While playing it's rewritten at least every 10 s, so an older
+    # one is from a LyricsBar that quit or hung.
+    if c and c["bundle"] and c["bundle"] == st.get("bundle") and (c["rate"] == 0 or now - c["at"] < 20):
+        st.update(track=c["track"], artist=c["artist"], album=c["album"], duration=c["duration"],
+                  rate=c["rate"], position=c["position"] + (now - c["at"]) * c["rate"])
     return st
 
 SEEK = os.path.join(HOME, "seek.json")

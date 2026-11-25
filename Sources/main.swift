@@ -878,7 +878,9 @@ final class StreamPlayer: NSObject, ObservableObject {
         cur.volume = 1
         cur.replaceCurrentItem(with: makeItem(tracks[index].stream))
         let pos = (j["position"] as? NSNumber)?.doubleValue ?? 0
-        cur.seek(to: CMTime(seconds: pos, preferredTimescale: 600))
+        cur.seek(to: CMTime(seconds: pos, preferredTimescale: 600)) { [weak self] _ in
+            DispatchQueue.main.async { self?.updateInfo() }      // paused there: the lyric line shown matches it
+        }
         trackChanged()
     }
     func previous() {
@@ -886,15 +888,9 @@ final class StreamPlayer: NSObject, ObservableObject {
     }
     func seek(_ s: Double) {
         cancelFade()
-        // exact, so the lyrics (timed to the hint below) match what plays
-        cur.seek(to: CMTime(seconds: s, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] done in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                // re-anchor lyricsd where the seek actually landed: Now Playing updates sent while it was
-                // seeking still carry the old position
-                if done, self.active { let t = self.cur.currentTime().seconds; if t.isFinite { noteSeek(t) } }
-                self.updateInfo()
-            }
+        // exact, so what plays matches the position the lyrics are timed to (clock.json, written by updateInfo)
+        cur.seek(to: CMTime(seconds: s, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async { self?.updateInfo() }
         }
     }
     func stop() {
@@ -924,7 +920,7 @@ final class StreamPlayer: NSObject, ObservableObject {
         if let a = artwork { info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: a.size) { _ in a } }
         // the exact clock for lyricsd: Now Playing reaches it late and only to the second, so lyrics would lag
         let clock: [String: Any] = ["bundle": Bundle.main.bundleIdentifier ?? "", "title": t.title, "artist": t.artist,
-                                    "position": pos.isFinite ? pos : 0, "at": Date().timeIntervalSince1970,
+                                    "album": t.album, "duration": t.duration, "position": pos.isFinite ? pos : 0, "at": Date().timeIntervalSince1970,
                                     "rate": cur.timeControlStatus == .playing ? 1.0 : 0.0]
         if let d = try? JSONSerialization.data(withJSONObject: clock) {
             try? d.write(to: URL(fileURLWithPath: home + "/clock.json"), options: .atomic)

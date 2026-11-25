@@ -39,8 +39,9 @@ Notes for coding agents (and humans) working on LyricsBar.
   - fallback: a whole-system tap
 - `scripts/lyricsd.py`: the lyrics daemon.
   - It runs `media-control stream`, then writes `state.json`, `artwork.jpg` and `current.txt` (the current lyric line).
-  - The Now Playing feed often doesn't announce seeks, so the app writes `seek.json` (`noteSeek`) on every seek and lyricsd resets its clock from it. The built-in player writes it again where the seek actually landed, and for 1.5 s lyricsd ignores Now Playing updates that disagree with the hint by more than 2 s (they were sent before the seek).
-  - While LyricsBar's own player is Now Playing, lyricsd times lyrics from `clock.json` (position, time, rate), which `StreamPlayer.updateInfo()` writes on every change. Now Playing reaches lyricsd late and only to the second, which left lyrics 1–3 s behind.
+  - It runs `media-control stream --micros` for exact timestamps (the plain ones are whole seconds, so events had to be anchored at arrival, which runs late). It falls back to plain timestamps if that media-control produces nothing with `--micros`.
+  - The Now Playing feed often doesn't announce seeks, so the app writes `seek.json` (`noteSeek`) on every seek and lyricsd resets its clock from it. For 1.5 s lyricsd ignores Now Playing updates that disagree with the hint by more than 2 s (they were sent before the seek).
+  - While LyricsBar (this bundle id) is the Now Playing app, lyricsd takes the song and timing from `clock.json` (title, artist, album, duration, position, time, rate), which `StreamPlayer.updateInfo()` writes on every change, instead of the feed, which arrives late. A playing clock older than 20 s is ignored (the app quit or hung).
   - It caches LRC in `cache/<md5(artist|title)>.json`.
 - `Resources/`: `Info.plist` (bump `CFBundleShortVersionString` for releases; `install.sh` prints old → new) and `AppIcon.icns`.
   - The icon is drawn in code by `Resources/icon/make_icon.swift`. Regenerate the `.icns` with `Resources/icon/make_icns.sh`.
