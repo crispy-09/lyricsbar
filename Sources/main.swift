@@ -1610,6 +1610,7 @@ final class BarView: NSView {
     var swipeSettling = false
     var peekNext: ((@escaping ((String, String)?) -> Void) -> Void)?   // App: the next song for any player
     private var swipeGeo: (start: CGFloat, rest: CGFloat)?
+    static let swipeLand: CGFloat = 110                // drag that brings the preview to its place
     static let swipeHitch: CGFloat = 90                // ↶ holds in place for this much pull before the previous song
     private var swipeShown: SwipeTarget?
     private var swipeExtra: CGFloat = 0                // extra push on the current text when a wider title takes ↶'s place
@@ -1708,12 +1709,14 @@ final class BarView: NSView {
             return (w, toNext ? curRight + 48 : curLeft - 48 - w, rest)
         }
         let g = geo(first)
-        let reach = g.rest - g.start                    // drag that brings the preview to its place
-        // past that point it holds (with a little give); for ↶, pulling a further `swipeHitch` brings the previous song
-        let past = toNext ? dx < reach : dx > reach
-        let eff = past ? reach + (dx - reach) * 0.15 : dx
+        let reach = g.rest - g.start                    // how far the preview travels to its place
+        // the same drag lands it however long the titles are; past that it holds (with a little give),
+        // and for ↶ pulling a further `swipeHitch` brings the previous song
+        let d = Self.swipeLand * (toNext ? -1 : 1)
+        let past = toNext ? dx < d : dx > d
+        let eff = past ? reach + (dx - d) * 0.15 : dx * (reach / d)
         var target = first
-        if first == .restart, swipeRestartable, let p = swipePrevSong, dx > reach + Self.swipeHitch { target = p }
+        if first == .restart, swipeRestartable, let p = swipePrevSong, dx > d + Self.swipeHitch { target = p }
         swipeTarget = target
         let tg = target == first ? g : geo(target)
         // the current text keeps clear of a wider preview (the previous song's title replacing ↶)
