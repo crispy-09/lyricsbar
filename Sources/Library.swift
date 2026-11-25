@@ -899,7 +899,11 @@ struct SpotifyQueueList: View {
                     Text("Up Next · Spotify · \(q.items.count) songs")
                     Spacer()
                     if q.busy { ProgressView().controlSize(.small) }
-                    if q.pending { Text("Applies when this song ends").font(.caption).foregroundStyle(.secondary) }
+                    if q.managed {
+                        Text("Your order").font(.caption).foregroundStyle(.secondary)
+                        Button("Reset") { q.release() }.buttonStyle(.borderless)
+                            .help("Go back to Spotify's own Up Next")
+                    }
                     Button { q.refresh() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless)
                     Button("Clear") { q.clear(report) }.buttonStyle(.borderless).disabled(q.items.isEmpty)
                 }

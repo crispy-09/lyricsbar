@@ -1190,7 +1190,9 @@ func transport(_ t: Transport) -> Bool {
     }
     switch t {
     case .toggle: run(mediaControl, ["toggle-play-pause"])
-    case .next: run(mediaControl, ["next-track"])
+    case .next:
+        // an Up Next order kept by LyricsBar: its first song, not whatever Spotify has queued itself
+        if !SpotifyQueue.shared.handleNext() { run(mediaControl, ["next-track"]) }
     case .previous: run(mediaControl, ["previous-track"])
     case .seek(let v): run(mediaControl, ["seek", String(format: "%.2f", v)])
     }
@@ -1512,8 +1514,7 @@ final class BarView: NSView {
         queueStrip.onMove = { [weak self] in
             guard let self else { return }
             let ids = self.queueStrip.entries.compactMap(\.uid)
-            if self.stripIsSpotify { SpotifyQueue.shared.reorder(ids) { err in
-                if let err { self.toast(err, seconds: 3) } else if SpotifyQueue.shared.pending { self.toast("Spotify switches to this after the song", seconds: 2) } } }
+            if self.stripIsSpotify { SpotifyQueue.shared.reorder(ids) { err in if let err { self.toast(err, seconds: 3) } } }
             else { StreamPlayer.shared.reorderUpcoming(ids) }
         }
         queueStrip.onClear = { [weak self] in
@@ -1521,7 +1522,7 @@ final class BarView: NSView {
             if self.stripIsSpotify {
                 SpotifyQueue.shared.clear { err in
                     if let err { self.toast(err, seconds: 3); self.syncSpotifyStrip() }   // put the songs back
-                    else { self.toast(SpotifyQueue.shared.pending ? "Cleared. Spotify stops after this song" : "Cleared Up Next", seconds: 2) }
+                    else { self.toast("Cleared. Spotify stops after this song", seconds: 2) }
                 }
                 self.queueStrip.entries = []
                 self.closePicker()
@@ -1533,8 +1534,7 @@ final class BarView: NSView {
         }
         queueStrip.onRemove = { [weak self] e in
             guard let self, let u = e.uid else { return }
-            if self.stripIsSpotify { SpotifyQueue.shared.remove(id: u) { err in
-                if let err { self.toast(err, seconds: 3) } else if SpotifyQueue.shared.pending { self.toast("Spotify switches to this after the song", seconds: 2) } } }
+            if self.stripIsSpotify { SpotifyQueue.shared.remove(id: u) { err in if let err { self.toast(err, seconds: 3) } } }
             else { StreamPlayer.shared.remove(uid: u) }
         }
         // keep the strip in sync with the player (song changes, Library edits); never mid-drag
@@ -2609,11 +2609,11 @@ final class BarView: NSView {
     func queueSpotifyPlaylist(_ id: String, _ name: String) {
         closePicker()
         guard bundleId == "com.spotify.client" else { toast("Play something in Spotify first", seconds: 2.5); return }
-        guard !SpotifyQueue.shared.busy else { toast("Still saving your Up Next changes. Try again in a moment", seconds: 3); return }
-        // Up Next edits still waiting for the song's end would skip these new songs away: drop them
-        let dropped = SpotifyQueue.shared.pending
-        SpotifyQueue.shared.cancelPending()
-        toast("Queuing \(name)…" + (dropped ? " (unsaved Up Next changes dropped)" : ""), seconds: 6)
+        guard !SpotifyQueue.shared.busy else { toast("Still skipping to a song. Try again in a moment", seconds: 3); return }
+        // these songs go into Spotify's own queue, which an Up Next order kept by LyricsBar wouldn't show: reset it
+        let dropped = SpotifyQueue.shared.managed
+        SpotifyQueue.shared.release()
+        toast("Queuing \(name)…" + (dropped ? " (your Up Next order was reset)" : ""), seconds: 6)
         let pid = id.hasSuffix(":collection") ? "spotify:collection" : spotifySafe(id)   // Liked Songs
         libraryJSON(["spotify-queue-playlist", pid]) { [weak self] obj, err in
             guard let self else { return }
@@ -2635,7 +2635,7 @@ final class BarView: NSView {
         closePicker()
         toast("Loading \(name)…", seconds: 3)
         if provider == "spotify" {
-            SpotifyQueue.shared.cancelPending()          // held Up Next edits belong to the music being replaced
+            SpotifyQueue.shared.release()                // a kept Up Next order belongs to the music being replaced
             StreamPlayer.shared.stop()
             if cfg.pauseOthers && bundleId != "com.spotify.client" { run(mediaControl, ["pause"]) }
             let uri = spotifySafe(id)
@@ -3013,7 +3013,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         URLCache.shared.removeAllCachedResponses()
         signal(SIGPIPE, SIG_IGN)          // a helper that exits before reading stdin must not kill the app
         // Spotify Up Next edits that were waiting for a song's end when LyricsBar quit (once Now Playing is known)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { SpotifyQueue.shared.restorePending() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { SpotifyQueue.shared.restore() }
         NotificationCenter.default.addObserver(forName: .lyricsBarToast, object: nil, queue: .main) { [weak self] n in
             if let t = n.object as? String { self?.view.toast(t, seconds: 3) }
         }
@@ -3179,8 +3179,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    let w = c.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ").map(String.init)
                                    let dump: (String?) -> Void = { err in
                                        q.refresh {
-                                           let lines = q.items.enumerated().map { "\($0.offset): \($0.element.title) — \($0.element.artist)" }
-                                           try? (["action error: \(err ?? "none")", "queue error: \(q.error ?? "none")"] + lines)
+                                           let lines = q.items.enumerated().map { "\($0.offset): \($0.element.title) — \($0.element.artist)  [\($0.element.uri)]" }
+                                           try? (["action error: \(err ?? "none")", "queue error: \(q.error ?? "none")", q.debugState] + lines)
                                                .joined(separator: "\n").write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
                                        }
                                    }
@@ -3188,6 +3188,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    q.refresh {
                                        let items = q.items
                                        switch w.count > 1 ? w[1] : "" {
+                                       case "state": dump(nil)
+                                       case "next": _ = transport(.next); DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(nil) }
                                        case "skip": if let n, items.indices.contains(n) { q.jump(id: items[n].id) { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } } }
                                        case "clear": q.clear { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } }
                                        case "remove": if let n, items.indices.contains(n) { q.remove(id: items[n].id) { e in DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { dump(e) } } }
@@ -3516,6 +3518,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         if view.bundleId == Bundle.main.bundleIdentifier, sp.active {
             let i = sp.index + 1
             done(sp.tracks.indices.contains(i) ? (sp.tracks[i].title, sp.tracks[i].artist) : nil)
+        } else if view.bundleId == "com.spotify.client", SpotifyQueue.shared.managed {
+            done(SpotifyQueue.shared.managedNext)            // LyricsBar's own order
         } else if view.bundleId == "com.spotify.client" {
             libraryJSON(["queue", "spotify"]) { obj, _ in
                 let f = (obj as? [[String: Any]])?.first

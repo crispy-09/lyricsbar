@@ -95,19 +95,19 @@ Playlists are managed in the Library's **Playlists** section. Pinned playlists a
 
 #### Spotify queue quirks
 
-Spotify's Web API can only read the queue and add to it. It has no way to remove, reorder or clear songs, and it can't change the queue without also changing the song that's playing. LyricsBar works around that, with some side effects:
+Spotify's Web API can only read the queue and add to it. It has no way to remove, reorder or clear songs. So once you edit Up Next, LyricsBar keeps the list itself and gives Spotify one song at a time:
 
-- **How an edit works:** LyricsBar mutes Spotify, skips through the old queue to empty it, starts your edited list, then unmutes.
-- **Edits wait for the song to end.** While a song plays, your edits show in Up Next straight away, but Spotify only gets them in the song's last second, so the song isn't interrupted. Expect a gap of a second or two before the next song. If you skip the song, the edits go through right away.
-- **While paused, edits go through at once.** The song stays paused at the same spot.
-- **"Play Now"** skips to the song with Spotify muted, so you don't hear the songs in between.
+- **Edits are instant and never touch Spotify.** Removing, reordering and clearing only change LyricsBar's own list. Nothing is muted or skipped.
+- **About 10 seconds before a song ends, LyricsBar hands Spotify the next song of your list.** Spotify then plays it by itself, without a gap. If Spotify would play that song next anyway, nothing is handed over.
+- **Sometimes LyricsBar has to switch songs itself**, which cuts the last fraction of a second of the song. That happens when you change the next song in a song's final seconds (after it was handed over), or when songs you queued in the Spotify app are ahead of it.
+- **Next in LyricsBar** plays the first song of your list. **Next pressed elsewhere** (the Spotify app, headphones) lets Spotify start its own next song for a moment before LyricsBar switches to yours.
+- **"Play Now"** starts that song directly and drops the songs before it.
 - **Clear** leaves just the current song. Spotify stops when it ends.
-- **The original playlist doesn't continue.** After an edit, Spotify plays your edited list instead of the playlist or album you started, then its autoplay may continue with similar songs. Shuffle is turned off.
-- **Skipped songs may show up in Spotify's recently played.** They're skipped within a second, so they don't count as plays.
-- **Local files** in the queue can't be re-queued, so a queue containing them can't be edited.
-- **Only the first ~20 songs can be kept.** Spotify only reports about 20 upcoming songs, so editing a longer queue (for example after queueing a big playlist) drops the songs past those.
-- **Edits waiting for the song's end are dropped** if you start other music (another album, a playlist from the bar, or another app) before the song ends.
-- **When Spotify plays on another device** (a phone or speaker), LyricsBar uses that device's volume and Spotify's "next" instead of the Mac's Spotify app, which is slower.
+- **A song that was already handed over can't be taken back.** If you then remove it, it stays in Spotify's own queue and plays once LyricsBar gives Up Next back.
+- **Spotify gets Up Next back** when your list runs out, when you start other music (another album, a playlist, another app), or with Reset in the Library's Up Next. Your list is only as long as what Spotify reported (about 20 songs); after it, Spotify carries on by itself.
+- **Local files** in the queue can't be handed to Spotify, so a queue containing them can't be edited.
+- **Songs you add in the Spotify app while LyricsBar keeps the list** don't show in LyricsBar's Up Next. Reset to see Spotify's queue again.
+- **LyricsBar has to be running**, and the Mac's Spotify app has to be the one playing, for the list to be followed.
 - **The queue Spotify reports can lag.** Up Next on the bar reloads when the song changes and every few seconds, but Spotify sometimes takes a moment to catch up.
 
 - **Apple Music**: uses the Music app through AppleScript.

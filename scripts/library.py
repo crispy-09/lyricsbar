@@ -8,6 +8,7 @@
   library.py spotify-jump <uri> <index> -> skip forward to that queued song
   library.py spotify-queue-playlist <uri> -> add a playlist's songs (max 100) to the end of the queue
   library.py spotify-replace <uri>...   -> replay current song + this list (remove / reorder)
+  library.py spotify-feed [--peek] <uri> -> make this song Spotify's next (--peek: only check); reports its first
   library.py spotify-login <client_id>  -> one-time Spotify sign-in (opens the browser)
 """
 import base64, hashlib, http.server, json, os, re, secrets, subprocess, sys, time
@@ -319,6 +320,27 @@ def _spotify_skip(st, n):
         time.sleep(0.12)
 
 
+def spotify_feed(uri, peek=False):
+    """LyricsBar keeps its own Up Next and hands Spotify one song shortly before the current one ends.
+    If Spotify would play this song next anyway, nothing is added. Otherwise (unless `peek`) it's added to
+    Spotify's queue. Returns what Spotify then lists first: if that isn't this song, something else is queued
+    ahead of it (songs added in the Spotify app), and LyricsBar switches songs itself instead."""
+    if not SPOTIFY_URI.match(uri):
+        raise RuntimeError("invalid song")
+    q = _queue_uris()
+    if (q and q[0] == uri) or peek:
+        return {"first": q[0] if q else None, "added": False}
+    spotify_api("POST", "/me/player/queue?uri=" + urllib.parse.quote(uri, safe=""))
+    first = None
+    for _ in range(3):                                     # the listing takes a moment to show the new song
+        time.sleep(0.35)
+        q = _queue_uris()
+        first = q[0] if q else None
+        if uri in q[:3]:
+            break
+    return {"first": first, "added": True}
+
+
 def _queue_uris():
     return [t.get("uri") for t in (spotify_api("GET", "/me/player/queue") or {}).get("queue", []) if t]
 
@@ -508,6 +530,9 @@ def main(argv):
             res = spotify_queue_playlist(argv[2])
         elif cmd == "spotify-jump":
             res = spotify_jump(argv[2], argv[3])
+        elif cmd == "spotify-feed":
+            peek = argv[2] == "--peek"                       # only look: is this song Spotify's next already?
+            res = spotify_feed(argv[3] if peek else argv[2], peek)
         elif cmd == "spotify-replace":
             start = len(argv) > 2 and argv[2] == "--start"   # start the list now instead of keeping the current song
             res = spotify_replace(argv[3:] if start else argv[2:], keep_current=not start)
