@@ -180,6 +180,15 @@ struct AppearancePane: View {
                 }
             }
             LyricsSections()
+            Section("While playing") {
+                Picker("The bar shows", selection: $store.c.playingShows) {
+                    Text("Lyrics").tag("lyrics")
+                    Text("Media controls").tag("controls")
+                    Text("Title and artist").tag("title")
+                }
+                Text("Lyrics still show in the Library window and, when set, on Discord.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("While paused") {
                 Picker("The bar shows", selection: $store.c.pausedShows) {
                     Text("The lyrics (as now)").tag("lyrics")
@@ -220,6 +229,13 @@ struct AppearancePane: View {
                 Toggle("Brightness", isOn: $store.c.showBrightness)
                 Toggle("Volume", isOn: $store.c.showVolume)
                 Toggle("Library", isOn: $store.c.showApps)
+                Toggle("Keyboard brightness", isOn: $store.c.showKeyboardLight)
+                    .disabled(!KeyboardLight.available)
+                Toggle("Siri", isOn: $store.c.showSiri)
+                Toggle("Screenshot", isOn: $store.c.showScreenshot)
+                Toggle("Switch to the regular Touch Bar", isOn: $store.c.showRegularBar)
+                Text("The regular Touch Bar keeps a ♪ in its Control Strip: tap it to bring LyricsBar back. The menu bar icon can switch too.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Extras") {
                 Toggle("Song progress line along the bottom edge", isOn: $store.c.showProgress)

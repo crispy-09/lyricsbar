@@ -35,6 +35,12 @@ struct Config: Codable, Equatable {
     var showBrightness = true
     var showVolume = true
     var showApps = true
+    var showKeyboardLight = false     // keyboard backlight slider
+    var showSiri = false
+    var showScreenshot = false
+    var showRegularBar = false        // button that hands the Touch Bar back to macOS
+    var barHidden = false             // LyricsBar is off the Touch Bar (the ♪ in the Control Strip brings it back)
+    var playingShows = "lyrics"       // while playing: "lyrics" | "controls" | "title"
     var mediaAutoHide = 8.0
     var pickerAutoHide = 15.0
     var panelAutoHide = 6.0

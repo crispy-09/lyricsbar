@@ -57,6 +57,20 @@ func presentSystemModal(_ bar: NSTouchBar, trayId: String) {
     }
 }
 
+/// Takes LyricsBar's bar off the Touch Bar, so macOS shows the app's own bar and the Control Strip again.
+func dismissSystemModal(_ bar: NSTouchBar) {
+    let cls: AnyClass = NSTouchBar.self
+    for name in ["dismissSystemModalTouchBar:", "dismissSystemModalFunctionBar:",
+                 "minimizeSystemModalTouchBar:", "minimizeSystemModalFunctionBar:"] {
+        let sel = NSSelectorFromString(name)
+        if let m = class_getClassMethod(cls, sel) {
+            typealias F = @convention(c) (AnyObject, Selector, NSTouchBar) -> Void
+            unsafeBitCast(method_getImplementation(m), to: F.self)(cls, sel, bar)
+            return
+        }
+    }
+}
+
 func addSystemTrayItem(_ item: NSTouchBarItem) {
     let sel = NSSelectorFromString("addSystemTrayItem:")
     if NSTouchBarItem.responds(to: sel) { NSTouchBarItem.perform(sel, with: item) }
@@ -328,7 +342,34 @@ func fill(_ v: NSView, in p: NSView) {
     ])
 }
 
-enum Panel { case none, brightness, volume }
+enum Panel { case none, brightness, volume, keyboard }
+
+/// The keyboard backlight, through CoreBrightness (private, same as Control Center uses).
+enum KeyboardLight {
+    private static let client: NSObject? = {
+        _ = dlopen("/System/Library/PrivateFrameworks/CoreBrightness.framework/CoreBrightness", RTLD_NOW)
+        return (NSClassFromString("KeyboardBrightnessClient") as? NSObject.Type)?.init()
+    }()
+    private static let id: UInt64? = {
+        guard let c = client, c.responds(to: NSSelectorFromString("copyKeyboardBacklightIDs")),
+              let a = c.perform(NSSelectorFromString("copyKeyboardBacklightIDs"))?.takeRetainedValue() as? [NSNumber]
+        else { return nil }
+        return a.first?.uint64Value
+    }()
+    static var available: Bool { id != nil }
+    static var level: Float {
+        get {
+            guard let c = client, let k = id, let m = c.method(for: NSSelectorFromString("brightnessForKeyboard:")) else { return 0 }
+            typealias F = @convention(c) (AnyObject, Selector, UInt64) -> Float
+            return unsafeBitCast(m, to: F.self)(c, NSSelectorFromString("brightnessForKeyboard:"), k)
+        }
+        set {
+            guard let c = client, let k = id, let m = c.method(for: NSSelectorFromString("setBrightness:forKeyboard:")) else { return }
+            typealias F = @convention(c) (AnyObject, Selector, Float, UInt64) -> Bool
+            _ = unsafeBitCast(m, to: F.self)(c, NSSelectorFromString("setBrightness:forKeyboard:"), max(0, min(1, newValue)), k)
+        }
+    }
+}
 
 // MARK: - Library helper (library.py)
 
@@ -1090,6 +1131,12 @@ final class BarView: NSView {
     var pickerTransport: Capsule!
     var pickerPlayBtn: PillButton!
     var briBtn: PillButton!, appsBtn: PillButton!
+    var kbdBtn: PillButton!, siriBtn: PillButton!, shotBtn: PillButton!, regularBtn: PillButton!
+    var onRegularBar: (() -> Void)?
+    var anyStripButton: Bool {
+        cfg.showBrightness || cfg.showVolume || cfg.showApps || (cfg.showKeyboardLight && KeyboardLight.available)
+            || cfg.showSiri || cfg.showScreenshot || cfg.showRegularBar
+    }
     var upNextReturnsToMedia = false
     let vizBG = VisualizerView(style: .background)
     let vizCompact = VisualizerView(style: .compact)
@@ -1257,19 +1304,27 @@ final class BarView: NSView {
         volBtn = PillButton(symbol(Sys.volumeSymbol, 14), self, #selector(openVolume), width: 52)
         briBtn = PillButton(symbol("sun.max.fill", 14), self, #selector(openBrightness), width: 52)
         appsBtn = PillButton(symbol("books.vertical.fill", 14), self, #selector(openApps), width: 52)
-        strip = Capsule([briBtn, volBtn, appsBtn], spacing: 10)
-        for (btn, isVol) in [(briBtn!, false), (volBtn!, true)] {
+        kbdBtn = PillButton(symbol("light.max", 14), self, #selector(openKeyboardLight), width: 52)
+        siriBtn = PillButton(symbol("siri", 15), self, #selector(openSiri), width: 52)
+        shotBtn = PillButton(symbol("camera.viewfinder", 14), self, #selector(openScreenshot), width: 52)
+        regularBtn = PillButton(symbol("rectangle.badge.xmark", 14), self, #selector(regularBar), width: 52)
+        strip = Capsule([briBtn, kbdBtn, volBtn, siriBtn, shotBtn, appsBtn, regularBtn], spacing: 10)
+        for (btn, panel) in [(briBtn!, Panel.brightness), (volBtn!, .volume), (kbdBtn!, .keyboard)] {
             let o = SlideOverlay()
             fill(o, in: btn)
-            o.onTap = { [weak self] in isVol ? self?.openVolume() : self?.openBrightness() }
+            o.onTap = { [weak self] in self?.openPanel(panel) }
             o.onSlide = { [weak self] d in
                 guard let self else { return }
-                if isVol {
+                switch panel {
+                case .volume:
                     if Sys.muted && d > 0 { Sys.muted = false }
                     Sys.volume = max(0, min(1, Sys.volume + d))
                     self.volBtn.image = symbol(Sys.volumeSymbol, 14)
                     self.toast("Volume  \(Int((Sys.muted ? 0 : Sys.volume) * 100))%")
-                } else {
+                case .keyboard:
+                    KeyboardLight.level = max(0, min(1, KeyboardLight.level + d))
+                    self.toast("Keyboard  \(Int(KeyboardLight.level * 100))%")
+                default:
                     Sys.brightness = max(0, min(1, Sys.brightness + d))
                     self.toast("Brightness  \(Int(Sys.brightness * 100))%")
                 }
@@ -1354,7 +1409,11 @@ final class BarView: NSView {
         briBtn.isHidden = !cfg.showBrightness
         volBtn.isHidden = !cfg.showVolume
         appsBtn.isHidden = !cfg.showApps
-        strip.isHidden = panelMode != .none || (!cfg.showBrightness && !cfg.showVolume && !cfg.showApps)
+        kbdBtn.isHidden = !(cfg.showKeyboardLight && KeyboardLight.available)
+        siriBtn.isHidden = !cfg.showSiri
+        shotBtn.isHidden = !cfg.showScreenshot
+        regularBtn.isHidden = !cfg.showRegularBar
+        strip.isHidden = panelMode != .none || !anyStripButton
         if !pickerMode { shuffle = cfg.defaultShuffle }
         applyVisualizer()
         let k = lyricKey; lyricKey = "\u{1}"; if Date() >= titleCardUntil { setLyric(k) }   // re-render with new style
@@ -1881,7 +1940,7 @@ final class BarView: NSView {
         guard mediaMode else { return }
         mediaTimer = Timer.scheduledTimer(withTimeInterval: cfg.mediaAutoHide, repeats: false) { [weak self] _ in
             guard let self else { return }
-            if self.keepControlsWhilePaused && !self.isPlaying { self.bumpMediaTimer(); return }   // stay up while paused
+            if self.keepControlsWhilePaused { self.bumpMediaTimer(); return }   // set to stay up (paused / playing)
             self.setMediaMode(false)
         }
     }
@@ -1941,6 +2000,9 @@ final class BarView: NSView {
         case .volume:
             panelIcon.image = symbol(Sys.volumeSymbol, 14)
             panelSlider.floatValue = Sys.muted ? 0 : Sys.volume
+        case .keyboard:
+            panelIcon.image = symbol("light.min", 14)
+            panelSlider.floatValue = KeyboardLight.level
         case .none: break
         }
         volBtn.image = symbol(Sys.volumeSymbol, 14)
@@ -1951,7 +2013,7 @@ final class BarView: NSView {
         panelMode = .none
         panelTimer?.invalidate()
         show(panel, false)
-        if cfg.showBrightness || cfg.showVolume || cfg.showApps { show(strip, true) }
+        if anyStripButton { show(strip, true) }
         updateLyricLimit()
         volBtn.image = symbol(Sys.volumeSymbol, 14)
     }
@@ -1968,6 +2030,7 @@ final class BarView: NSView {
         case .volume:
             Sys.volume = panelSlider.floatValue
             panelIcon.image = symbol(Sys.volumeSymbol, 14)
+        case .keyboard: KeyboardLight.level = panelSlider.floatValue
         case .none: break
         }
     }
@@ -1977,11 +2040,19 @@ final class BarView: NSView {
         switch panelMode {
         case .volume: Sys.muted.toggle(); refreshPanel()
         case .brightness: Sys.brightness = 0.05; refreshPanel()
+        case .keyboard: KeyboardLight.level = 0; refreshPanel()      // backlight off
         case .none: break
         }
     }
 
     @objc func openApps() { LibraryWindow.shared.toggle() }
+    @objc func openKeyboardLight() { openPanel(.keyboard) }
+    @objc func openSiri() { NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Siri.app")) }
+    /// The screenshot toolbar (same as ⇧⌘5).
+    @objc func openScreenshot() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Screenshot.app"))
+    }
+    @objc func regularBar() { onRegularBar?() }
 
     /// "pause" = play/pause (shows the controls instead when nothing is loaded), "controls" = media controls, "none".
     func lyricGesture(_ action: String) {
@@ -2136,7 +2207,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         bar.defaultItemIdentifiers = [mainId]
 
         let tray = NSCustomTouchBarItem(identifier: trayId)
-        tray.view = NSButton(image: symbol("music.note", 14)!, target: self, action: #selector(present))
+        tray.view = NSButton(image: symbol("music.note", 14)!, target: self, action: #selector(showOnBar))
+        view.onRegularBar = { [weak self] in self?.setBarHidden(true) }
         addSystemTrayItem(tray)
         dfrSetControlStripPresence(trayId.rawValue, true)
         dfrShowCloseBox(false)
@@ -2189,6 +2261,22 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                if c.hasPrefix("toast ") { self.view.toast(String(c.dropFirst(6)).trimmingCharacters(in: .whitespacesAndNewlines), seconds: 3) }
                                if c.hasPrefix("media") { self.view.setMediaMode(true) }
                                if c.trimmingCharacters(in: .whitespacesAndNewlines) == "apps" { self.view.openApps() }
+                               // "regular on|off": hand the Touch Bar to macOS / take it back
+                               // "playingshows lyrics|controls|title", "buttons on|off" (all optional strip buttons), "kbd"
+                               let w = c.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ").map(String.init)
+                               if w.first == "regular", w.count == 2 { self.setBarHidden(w[1] == "on"); return }
+                               if w.first == "playingshows", w.count == 2 { ConfigStore.shared.c.playingShows = w[1]; return }
+                               if w.first == "buttons", w.count == 2 {
+                                   let on = w[1] == "on"
+                                   ConfigStore.shared.c.showKeyboardLight = on; ConfigStore.shared.c.showSiri = on
+                                   ConfigStore.shared.c.showScreenshot = on; ConfigStore.shared.c.showRegularBar = on
+                                   return
+                               }
+                               if w.first == "kbd" {
+                                   try? "keyboard light: available=\(KeyboardLight.available) level=\(KeyboardLight.level)"
+                                       .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                   return
+                               }
                                if c.trimmingCharacters(in: .whitespacesAndNewlines) == "arthold" { self.view.artButton.onHold?() }
                                if c.hasPrefix("discordtest ") {          // test against a fake Discord socket; "discordtest off" undoes it
                                    let arg = String(c.dropFirst(12)).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2274,7 +2362,25 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         nc.addObserver(self, selector: #selector(present), name: NSWorkspace.didWakeNotification, object: nil)
     }
 
-    @objc func present() { presentSystemModal(bar, trayId: trayId.rawValue) }
+    /// Re-shows LyricsBar's bar (it can be pushed aside by the system); does nothing while switched off.
+    @objc func present() {
+        guard !cfg.barHidden else { return }
+        presentSystemModal(bar, trayId: trayId.rawValue)
+    }
+    @objc func showOnBar() { setBarHidden(false) }
+    @objc func toggleBarHidden() { setBarHidden(!cfg.barHidden) }
+    /// Hand the Touch Bar back to macOS (the ♪ stays in the Control Strip to come back), or take it again.
+    func setBarHidden(_ hidden: Bool) {
+        if cfg.barHidden != hidden { ConfigStore.shared.c.barHidden = hidden }
+        if hidden {
+            view.closePicker(); if view.mediaMode { view.setMediaMode(false) }
+            dismissSystemModal(bar)
+        } else {
+            present()
+        }
+        if let s = statusItem { NSStatusBar.system.removeStatusItem(s); statusItem = nil }
+        updateStatusItem()        // menu title follows the state
+    }
 
     func updateStatusItem() {
         if !cfg.showMenuBarIcon { if let s = statusItem { NSStatusBar.system.removeStatusItem(s) }; statusItem = nil; return }
@@ -2284,6 +2390,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         s.button?.image?.isTemplate = true
         let m = NSMenu()
         m.addItem(withTitle: "Library…", action: #selector(openLibrary), keyEquivalent: "l").target = self
+        m.addItem(withTitle: cfg.barHidden ? "Show LyricsBar on the Touch Bar" : "Use the Regular Touch Bar",
+                  action: #selector(toggleBarHidden), keyEquivalent: "").target = self
         // only offer the switch when the other version is actually installed
         let other = NSHomeDirectory() + "/Applications/" + (isBeta ? "LyricsBar.app" : "LyricsBar Beta.app")
         if FileManager.default.fileExists(atPath: other) {
@@ -2426,12 +2534,15 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
 
     var pausedSince: Date?
     var controlsOpenedForPause = false
+    /// What the lyric area shows instead of lyrics: while paused (`pausedShows`, after a delay) or while
+    /// playing (`playingShows`).
     func updatePausedScreen() {
-        let mode = cfg.pausedShows
+        let playing = view.isPlaying && !lastTitle.isEmpty
+        let mode = playing ? cfg.playingShows : cfg.pausedShows
         let paused = !view.isPlaying && !lastTitle.isEmpty
         if !paused { pausedSince = nil } else if pausedSince == nil { pausedSince = Date() }
         let since = pausedSince.map { Date().timeIntervalSince($0) } ?? 0
-        let active = paused && mode != "lyrics" && since >= cfg.pausedDelay
+        let active = mode != "lyrics" && (playing || (paused && since >= cfg.pausedDelay))
         view.keepControlsWhilePaused = active && mode == "controls"
         guard active else {
             view.clearPaused()

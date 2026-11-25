@@ -70,6 +70,8 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 | Tap the album art | Show / hide the media controls, or the playlist picker when nothing is playing |
 | Hold the album art | Open / close Settings |
 | Tap 📚 | Open / close the Library window |
+| Optional buttons (Settings → Appearance → Buttons) | Keyboard brightness (tap for a slider, or slide across it), Siri, Screenshot (the ⇧⌘5 toolbar), and **regular Touch Bar** |
+| Regular Touch Bar button, or the menu bar icon's "Use the Regular Touch Bar" | Gives the Touch Bar back to macOS. A ♪ stays in the Control Strip: tap it (or use the menu bar icon) to bring LyricsBar back. It stays off across restarts until you do |
 | Hold a playlist in the picker | Queue it next instead of playing it. For Spotify this works on playlists you made (up to 100 songs); Spotify doesn't let personal apps read playlists you only follow |
 | In Up Next, hold and drag a song | Reorder it, or drop it on the trash to remove it |
 | In Up Next, swipe right at the start of the list | Reveal **Clear**; tap it to empty Up Next |
@@ -77,7 +79,7 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 Everything else is in **Settings** (Library window sidebar, or ⌘,):
 
 - **General**: what ▶ starts when nothing is loaded, shuffle, resume, crossfade, lyric gestures, auto-hide timers
-- **Appearance**: background (how long the album art stays after pausing), lyrics, what the bar shows while paused (lyrics, media controls, title and artist, rotating quotes, or your own phrase), visualizer, buttons. With a rotating wallpaper the background is black, because macOS doesn't report which picture is showing
+- **Appearance**: background (how long the album art stays after pausing), lyrics, what the bar shows while playing (lyrics, media controls, or title and artist) and while paused (lyrics, media controls, title and artist, rotating quotes, or your own phrase), visualizer, buttons. With a rotating wallpaper the background is black, because macOS doesn't report which picture is showing
 - **Providers**: the providers shown in the picker, scrobbling, accounts
 - **Discord**: Rich Presence
 

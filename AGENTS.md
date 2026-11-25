@@ -78,6 +78,8 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `discordpreview` | Write the activity that would be sent, plus the status |
 | `spq`, `spq skip N`, `spq remove N`, `spq move A B`, `spq clear` | Read or edit Spotify's Up Next through `SpotifyQueue`, then write the queue to `debug.out`. **Edits change real playback.** Spotify must be playing, because its API returns an empty queue for an idle device |
 | `spqpl`, `spqpl N` | List Spotify playlists, or queue playlist N (the picker's hold action). **This changes the real queue**, so use a small playlist |
+| `regular on` / `regular off` | Hand the Touch Bar to macOS (as the strip's "regular Touch Bar" button does) / take it back |
+| `playingshows lyrics\|controls\|title`, `buttons on\|off`, `kbd` | Set what the bar shows while playing; show/hide all optional strip buttons (keyboard light, Siri, Screenshot, regular bar); read the keyboard backlight. These change the config |
 | `mutedtest` | Muted playback self-test (play, next, seek, crossfade, previous, pause, restore). No sound, no scrobbles; the log goes to `debug.out` |
 
 Other signals: `SIGUSR1` toggles the media controls and `SIGUSR2` opens the volume slider.
