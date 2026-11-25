@@ -502,6 +502,7 @@ final class StreamPlayer: NSObject, ObservableObject {
     func load(_ t: [StreamTrack], start: Int = 0) {
         guard !t.isEmpty else { return }
         tracks = t; index = max(0, min(start, t.count - 1))
+        shuffled = false; unshuffled = []          // a new queue starts in its own order
         startedAt = Date()
         setCommands(true)
         playCurrent()
@@ -519,6 +520,7 @@ final class StreamPlayer: NSObject, ObservableObject {
             cur.replaceCurrentItem(with: makeItem(tracks[index].stream))
         }
         cur.volume = 1
+        wantPlaying = true
         cur.play()
         trackChanged()
     }
@@ -704,6 +706,7 @@ final class StreamPlayer: NSObject, ObservableObject {
     func resetListening() { listenUid = nil }
 
     private func trackChanged() {
+        resumeAt = 0
         objectWillChange.send()
         DispatchQueue.main.async { self.save() }
         let t = tracks[index]
@@ -768,6 +771,7 @@ final class StreamPlayer: NSObject, ObservableObject {
             forgetPreload()
             inn.replaceCurrentItem(with: makeItem(tracks[index].stream))
         }
+        wantPlaying = true
         inn.play()
         cur = inn                 // Now Playing / lyrics switch to the incoming song right away
         trackChanged()
@@ -863,10 +867,20 @@ final class StreamPlayer: NSObject, ObservableObject {
     /// One bad file: skip it. Several in a row means the server is unreachable (or the login expired):
     /// pause there and keep the queue, instead of failing through every song and ending playback.
     private var failStreak = 0
+    private weak var failedItem: AVPlayerItem?     // a failure is reported twice (status + notification): handle it once
+    private var resumeAt: Double = 0               // where the loaded song should continue if it has to be loaded again
+    private var wantPlaying = false                // the user's intent (the player itself may report paused after a failure)
     private func skipAfterFailure() {
+        if let it = cur.currentItem { if it === failedItem { return }; failedItem = it }
+        // paused (a queue restored at login before the network is up, or after a long sleep): don't start
+        // playing or move through the queue. play() loads the song again.
+        if !wantPlaying { return }
+        let at = cur.currentTime().seconds
+        if at.isFinite, at > 1 { resumeAt = at }
         failStreak += 1
         if failStreak >= 3 || followingIndex == nil {
             failStreak = 0
+            wantPlaying = false
             cancelFade(); cur.pause(); save()
             NotificationCenter.default.post(name: .lyricsBarToast, object: "Can't reach your Subsonic server")
             objectWillChange.send()
@@ -877,11 +891,23 @@ final class StreamPlayer: NSObject, ObservableObject {
 
     func play() {
         guard active else { return }
+        wantPlaying = true
         if pausing {                                   // pressed again while fading out: come back up
             pausing = false
             rampVolume(to: 1, over: Self.resumeFade); objectWillChange.send(); return
         }
         cancelFade()
+        if tracks.indices.contains(index), cur.currentItem == nil || cur.currentItem?.status == .failed {
+            // the song couldn't load (the server was unreachable): a failed item can't be played, so load it again
+            let at = cur.currentTime().seconds
+            let pos = at.isFinite && at > 1 ? at : resumeAt
+            cur.replaceCurrentItem(with: makeItem(tracks[index].stream))
+            if pos > 1 {
+                cur.seek(to: CMTime(seconds: pos, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    DispatchQueue.main.async { self?.updateInfo() }
+                }
+            }
+        }
         guard cur.timeControlStatus == .paused else { return }   // already playing
         cur.volume = 0
         cur.play()
@@ -890,6 +916,7 @@ final class StreamPlayer: NSObject, ObservableObject {
     func jump(to i: Int) { guard tracks.indices.contains(i) else { return }; index = i; playCurrent() }
     func pause() {
         guard !pausing else { return }
+        wantPlaying = false
         cancelFade()
         guard cur.timeControlStatus != .paused, !testMuted else { cur.pause(); save(); return }
         pausing = true
@@ -931,7 +958,9 @@ final class StreamPlayer: NSObject, ObservableObject {
     func save() {
         // nothing loaded is NOT "queue cleared" (e.g. the login wasn't readable yet at launch): only stop() deletes it
         guard active else { return }
-        let pos = cur.currentTime().seconds
+        var pos = cur.currentTime().seconds
+        // not loaded yet (just restored, or it failed): keep the position it's meant to continue from
+        if !pos.isFinite || (pos < 1 && cur.currentItem?.status != .readyToPlay) { pos = resumeAt }
         let obj: [String: Any] = [
             "index": index, "position": pos.isFinite ? pos : 0, "shuffled": shuffled,
             "tracks": tracks.map { ["id": $0.id, "title": $0.title, "artist": $0.artist, "album": $0.album,
@@ -972,6 +1001,7 @@ final class StreamPlayer: NSObject, ObservableObject {
             DispatchQueue.main.async { self?.updateInfo() }      // paused there: the lyric line shown matches it
         }
         trackChanged()
+        resumeAt = pos
     }
     func previous() {
         if cur.currentTime().seconds > 3 || index == 0 { seek(0) } else { previousTrack() }
@@ -990,7 +1020,9 @@ final class StreamPlayer: NSObject, ObservableObject {
         cur.pause()
         cur.replaceCurrentItem(with: nil)
         forgetPreload(); other.replaceCurrentItem(with: nil)
+        wantPlaying = false
         tracks = []
+        shuffled = false; unshuffled = []
         setCommands(false)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         MPNowPlayingInfoCenter.default().playbackState = .stopped
@@ -2296,12 +2328,18 @@ final class BarView: NSView {
 
     func show(_ v: NSView, _ on: Bool) {
         if v === lyric && cfg.visualizerStyle == "compact" { show(vizCompact, on) }
+        shown[ObjectIdentifier(v)] = on
         if on { v.isHidden = false }
         NSAnimationContext.runAnimationGroup({ c in
             c.duration = 0.2
             v.animator().alphaValue = on ? 1 : 0
-        }, completionHandler: { if !on { v.isHidden = true } })
+        }, completionHandler: { [weak self, weak v] in
+            // only if it's still meant to be hidden: shown again within the fade, this would hide it for good
+            guard let v, !on, self?.shown[ObjectIdentifier(v)] == false else { return }
+            v.isHidden = true
+        })
     }
+    private var shown: [ObjectIdentifier: Bool] = [:]
 
     @objc func toggleMedia() {
         if pickerParked { closePicker() }        // tucked away behind the expanded strip: act as if it were closed

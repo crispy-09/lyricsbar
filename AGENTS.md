@@ -43,7 +43,9 @@ Notes for coding agents (and humans) working on LyricsBar.
   - It runs `media-control stream --micros` for exact timestamps (the plain ones are whole seconds, so events had to be anchored at arrival, which runs late). It falls back to plain timestamps if that media-control produces nothing with `--micros`.
   - The Now Playing feed often doesn't announce seeks, so the app writes `seek.json` (`noteSeek`) on every seek and lyricsd resets its clock from it. For 1.5 s lyricsd ignores Now Playing updates that disagree with the hint by more than 2 s (they were sent before the seek).
   - While LyricsBar (this bundle id) is the Now Playing app, lyricsd takes the song and timing from `clock.json` (title, artist, album, duration, position, time, rate), which `StreamPlayer.updateInfo()` writes on every change, instead of the feed, which arrives late. A playing clock older than 20 s is ignored (the app quit or hung).
-  - It caches LRC in `cache/<md5(artist|title)>.json`.
+  - It caches LRC in `cache/<md5(artist|title)>.json` (written atomically; a damaged file is refetched; "no lyrics" expires after a week; a match made without knowing the song's length isn't cached).
+  - Lookups run in a thread (`_lookup`) so a slow network doesn't freeze the line; a failed lookup is retried after 5 s, 30 s, then every 2 min.
+  - The AppleScript fallback (`player()`) only runs while the `media-control` stream is down, every 5 s. Problems go to `error.log` once each (`note`).
 - `Resources/`: `Info.plist` (bump `CFBundleShortVersionString` for releases; `install.sh` prints old → new) and `AppIcon.icns`.
   - The icon is drawn in code by `Resources/icon/make_icon.swift`. Regenerate the `.icns` with `Resources/icon/make_icns.sh`.
 - `build.sh` builds into `<name>.building.app` and swaps it in only on success. `install.sh` is also the updater: it never touches `~/.touchbar-lyrics` data or the Keychain, and it remembers the signing identity in `~/.touchbar-lyrics/sign-id`.

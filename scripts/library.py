@@ -203,7 +203,7 @@ def spotify_jump(uri, hint):
     finally:
         if vol is not None:
             time.sleep(0.4)                                # let the last skip land before the sound comes back
-            _spotify_volume(st, dev, vol)
+            _spotify_unmute(st, dev, vol)
     return {"skipped": n}
 
 
@@ -271,18 +271,33 @@ def _spotify_volume(st, dev, v=None):
         script = 'tell application "Spotify" to get sound volume' if v is None else \
                  f'tell application "Spotify" to set sound volume to {int(v)}'
         try:
-            out = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=5).stdout
-            return int(out.strip()) if v is None and out.strip().isdigit() else None
+            r = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True, timeout=5)
+            if v is not None:
+                return None if r.returncode == 0 else False
+            return int(r.stdout.strip()) if r.stdout.strip().isdigit() else None
         except Exception:
-            return None
+            return None if v is None else False
     if v is None:
         p = ((st or {}).get("device") or {}).get("volume_percent")
         return int(p) if isinstance(p, (int, float)) else None
     try:
         spotify_api("PUT", f"/me/player/volume?volume_percent={int(v)}&device_id={dev}")
-    except RuntimeError:
-        pass
+    except Exception:                                      # a dropped connection raises URLError, not RuntimeError
+        return False
     return None
+
+
+def _spotify_unmute(st, dev, vol):
+    """Put the volume back after a muted edit. Must not fail quietly: Spotify would stay silent."""
+    if vol is None:
+        return
+    for attempt in range(3):
+        try:
+            if _spotify_volume(st, dev, vol) is not False:
+                return
+        except Exception:
+            pass
+        time.sleep(1 + attempt)
 
 
 def _spotify_skip(st, n):
@@ -332,6 +347,7 @@ def spotify_replace(uris, keep_current=True):
     vol = _spotify_volume(st, dev)
     if vol is not None:                                    # never mute without knowing what to restore
         _spotify_volume(st, dev, 0)
+    skipped = played = done = False                        # how far the edit got, for putting things back if it fails
     try:
         if st.get("shuffle_state"):                        # a shuffled list would scramble the new order
             spotify_api("PUT", f"/me/player/shuffle?state=false&device_id={dev}")
@@ -340,9 +356,11 @@ def spotify_replace(uris, keep_current=True):
         for _ in range(3):                                 # the queue listing shows at most ~20 songs at a time
             q = _queue_uris()
             if q:
+                skipped, played = True, False
                 _spotify_skip(st, len(q))
                 time.sleep(0.4)
             spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": play})
+            played = True
             time.sleep(0.6)
             after, rest = _queue_uris(), play[1:]
             # done once Up Next starts with the new list (or, for a clear, holds none of the songs we skipped)
@@ -359,16 +377,30 @@ def spotify_replace(uris, keep_current=True):
             # (plus the time this took, if it was playing)
             now = pos + (int((time.time() - t0) * 1000) if playing else 0)
             spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
+        done = True
     finally:
-        # whatever happened, a song that was paused must not come back playing out loud
-        if not playing:
-            try:
-                spotify_api("PUT", f"/me/player/pause?device_id={dev}")
-            except RuntimeError:
-                pass
-        if vol is not None:
-            time.sleep(0.4)                                # let the seek/pause land before the sound comes back
-            _spotify_volume(st, dev, vol)
+        try:
+            if not done and (skipped or played):
+                # the edit failed part-way: the song was skipped away from or started again from 0:00.
+                # Put it back where it was before the sound returns (best effort).
+                try:
+                    if not played:
+                        spotify_api("PUT", f"/me/player/play?device_id={dev}", {"uris": [cur]})
+                        time.sleep(0.4)
+                    now = pos + (int((time.time() - t0) * 1000) if playing else 0)
+                    spotify_api("PUT", f"/me/player/seek?position_ms={now}&device_id={dev}")
+                except Exception:
+                    pass
+            # whatever happened, a song that was paused must not come back playing out loud
+            if not playing:
+                try:
+                    spotify_api("PUT", f"/me/player/pause?device_id={dev}")
+                except Exception:                          # offline raises URLError: still unmute below
+                    pass
+        finally:
+            if vol is not None:
+                time.sleep(0.4)                            # let the seek/pause land before the sound comes back
+                _spotify_unmute(st, dev, vol)
     return {"count": len(uris)}
 
 
@@ -495,4 +527,6 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))   # so `finally` runs (an edit must not leave Spotify muted)
     main(sys.argv)

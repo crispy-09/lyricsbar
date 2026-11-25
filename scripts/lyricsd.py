@@ -2,7 +2,7 @@
 """Touch Bar synced lyrics daemon.
 Polls Spotify / Apple Music, fetches synced lyrics from lrclib.net,
 and writes the current line to ~/.touchbar-lyrics/current.txt (read by MTMR)."""
-import datetime, json, os, re, subprocess, threading, time, urllib.parse, urllib.request, hashlib
+import datetime, json, os, re, subprocess, sys, threading, time, urllib.parse, urllib.request, hashlib
 
 HOME = os.path.expanduser("~/.touchbar-lyrics")
 CACHE = os.path.join(HOME, "cache")
@@ -80,9 +80,19 @@ def parse_lrc(text):
 def lyrics_for(p):
     key = hashlib.md5(f"{p['artist']}|{p['track']}".lower().encode()).hexdigest()
     path = os.path.join(CACHE, key + ".json")
-    if os.path.exists(path):
+    try:
         with open(path) as f:
-            return [tuple(x) for x in json.load(f)]
+            cached = [tuple(x) for x in json.load(f)]
+        # "no lyrics" is only remembered for a week: they may have been added since
+        if cached or time.time() - os.stat(path).st_mtime < 7 * 86400:
+            return cached
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError):
+        try:
+            os.remove(path)                      # a damaged file (cut off mid-write): fetch again
+        except OSError:
+            pass
     synced = None
     dur = p.get("duration") or 0                 # some players report 0 at first
     try:
@@ -101,13 +111,15 @@ def lyrics_for(p):
         except Exception:
             return None  # network error: don't cache, retry next song change
     lines = parse_lrc(synced)
-    if lines or dur > 0:                         # "no lyrics" found without knowing the length: don't remember it
-        with open(path, "w") as f:
+    if dur > 0:                                  # without the length the match is a guess: don't remember it
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w") as f:
             json.dump(lines, f)
+        os.replace(tmp, path)                    # never leave a half-written file for the next read
     return lines
 
-def write(text):
-    if len(text) > MAXLEN:
+def write(text, clip=True):
+    if clip and len(text) > MAXLEN:
         text = text[:MAXLEN - 1] + "…"
     tmp = OUT + ".tmp"
     with open(tmp, "w") as f:
@@ -115,10 +127,20 @@ def write(text):
     os.replace(tmp, OUT)
 
 import shutil
-# Homebrew lives in /opt/homebrew on Apple silicon and /usr/local on Intel (most Touch Bar Macs)
-MEDIA_CONTROL = next((p for p in ("/opt/homebrew/bin/media-control", "/usr/local/bin/media-control")
-                      if os.path.exists(p)), shutil.which("media-control") or "media-control")
-_np = {"state": None, "anchor": 0.0}
+def media_control():
+    """Homebrew lives in /opt/homebrew on Apple silicon and /usr/local on Intel (most Touch Bar Macs).
+    Looked up each time, so installing it later is picked up without a restart."""
+    return next((p for p in ("/opt/homebrew/bin/media-control", "/usr/local/bin/media-control")
+                 if os.path.exists(p)), shutil.which("media-control"))
+
+_said = set()
+def note(msg):
+    """One line per distinct problem in error.log (launchd sends stderr there)."""
+    if msg not in _said:
+        _said.add(msg)
+        print(time.strftime("%Y-%m-%d %H:%M:%S"), "lyricsd:", msg, file=sys.stderr, flush=True)
+
+_np = {"state": None, "anchor": 0.0, "up": False}
 _lock = threading.Lock()
 
 def _parse_ts(ts):
@@ -176,10 +198,16 @@ def _stream():
     while True:
         proc, got = None, False
         try:
-            proc = subprocess.Popen([MEDIA_CONTROL, "stream", "--no-diff"] + (["--micros"] if micros else []),
+            mc = media_control()
+            if not mc:
+                note("media-control isn't installed (brew install media-control): no lyrics or song info until it is")
+                time.sleep(8)
+                continue
+            proc = subprocess.Popen([mc, "stream", "--no-diff"] + (["--micros"] if micros else []),
                                     stdout=subprocess.PIPE, text=True)
             for line in proc.stdout:
                 got = True
+                _np["up"] = True
                 try:
                     msg = json.loads(line)
                     p = (msg.get("payload") if isinstance(msg, dict) else None) or {}
@@ -215,16 +243,20 @@ def _stream():
                         continue     # an update still from before the seek: the seek hint stands
                     _np["state"] = st
                     _np["anchor"] = anchor
-        except Exception:
-            pass
+        except Exception as e:
+            note(f"media-control stream failed: {type(e).__name__}")
         finally:
+            _np["up"] = False
+            with _lock:
+                _np["state"] = None              # nothing is known while the stream is down
             if proc is not None:                 # never leave an old media-control running
                 try:
                     proc.kill(); proc.wait(timeout=5)
                 except Exception:
                     pass
-            if micros and not got:
-                micros = False                   # an older media-control without --micros: plain timestamps
+                if micros and not got:
+                    micros = False               # it ran but printed nothing: an older one without --micros
+                    note("media-control printed nothing with --micros; using plain timestamps")
         time.sleep(2)
 
 CLOCK = os.path.join(HOME, "clock.json")
@@ -287,37 +319,71 @@ def _apply_seek(seen):
                 _np["hint"] = (pos, at)
     return m
 
+_found = {}                                      # song key → lines ([] = none, None = lookup failed)
+
+def _lookup(key, st):
+    """Runs off the main loop: a slow network must not freeze the line on screen."""
+    try:
+        res = lyrics_for(st)
+    except Exception as e:
+        note(f"lyrics lookup failed: {type(e).__name__}")
+        res = None
+    with _lock:
+        _found[key] = res
+
 def main():
     threading.Thread(target=_stream, daemon=True).start()
     cur_key, lines, last_written, polled_at, as_state = None, None, None, 0, None
+    looking, tries, retry_at = False, 0, 0.0
     seek_seen = None
     while True:
-        seek_seen = _apply_seek(seek_seen)
-        state = now_playing()
-        if state is None:  # fallback: AppleScript (Spotify / Music)
-            if time.time() - polled_at >= 1.0:
-                as_state, polled_at = player(), time.time()
-            if as_state:
-                state = dict(as_state); state["position"] += time.time() - polled_at
-        if state:
-            k = (state["artist"], state["track"])
-            if k != cur_key:
-                cur_key, lines = k, None
-                write(f"♪ {state['track']} — {state['artist']}")
-                lines = lyrics_for(state)
-        if not state:
-            text = ""
-        elif not lines:
-            text = f"♪ {state['track']} — {state['artist']}" if setting("showTitleWhenNoLyrics", True) else "♪"
-        else:
-            pos = state["position"] + float(setting("lyricOffset", 0.35))
-            text = ""
-            for t, w in lines:
-                if t <= pos: text = w
-                else: break
-            text = text or "♪"
-        if text != last_written:
-            write(text); last_written = text
+        try:
+            seek_seen = _apply_seek(seek_seen)
+            state = now_playing()
+            # fallback, only while the Now Playing stream is down: ask Spotify / Music directly, now and then
+            if state is None and not _np["up"]:
+                if time.time() - polled_at >= 5.0:
+                    as_state, polled_at = player(), time.time()
+                if as_state:
+                    state = dict(as_state); state["position"] += time.time() - polled_at
+            if state:
+                k = (state["artist"], state["track"])
+                if k != cur_key:
+                    cur_key, lines, looking, tries, retry_at = k, None, False, 0, 0.0
+                    with _lock:
+                        _found.clear()
+                    last_written = f"♪ {state['track']} — {state['artist']}"
+                    write(last_written, clip=False)
+                if lines is None and not looking and time.time() >= retry_at:
+                    looking = True
+                    threading.Thread(target=_lookup, args=(k, dict(state)), daemon=True).start()
+                if looking:
+                    with _lock:
+                        done, got = k in _found, _found.pop(k, None)
+                    if done:
+                        looking = False
+                        if got is None:          # the network failed: try again shortly, not only on the next song
+                            tries += 1
+                            retry_at = time.time() + (5, 30, 120)[min(tries, 3) - 1]
+                        else:
+                            lines = got
+            title = False
+            if not state:
+                text = ""
+            elif not lines:
+                title = bool(setting("showTitleWhenNoLyrics", True))
+                text = f"♪ {state['track']} — {state['artist']}" if title else "♪"
+            else:
+                pos = state["position"] + float(setting("lyricOffset", 0.35))
+                text = ""
+                for t, w in lines:
+                    if t <= pos: text = w
+                    else: break
+                text = text or "♪"
+            if text != last_written:
+                write(text, clip=not title); last_written = text
+        except Exception as e:                   # one bad pass must not take the daemon down (launchd would loop it)
+            note(f"main loop: {type(e).__name__}: {e}")
         time.sleep(0.2)
 
 if __name__ == "__main__":
