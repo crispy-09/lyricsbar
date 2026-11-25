@@ -102,12 +102,13 @@ Spotify's Web API can only read the queue and add to it. It has no way to remove
 - **Sometimes LyricsBar has to switch songs itself**, which cuts the last fraction of a second of the song. That happens when you change the next song in a song's final seconds (after it was handed over), or when songs you queued in the Spotify app are ahead of it.
 - **Next in LyricsBar** plays the first song of your list. **Next pressed elsewhere** (the Spotify app, headphones) lets Spotify start its own next song for a moment before LyricsBar switches to yours.
 - **"Play Now"** starts that song directly and drops the songs before it.
-- **Clear** leaves just the current song. Spotify stops when it ends.
+- **Clear** leaves just the current song. Spotify stops when it ends; it may stop at 0:00 of its own next song instead of the very end of the current one.
 - **A song that was already handed over can't be taken back.** If you then remove it, it stays in Spotify's own queue and plays once LyricsBar gives Up Next back.
 - **Spotify gets Up Next back** when your list runs out, when you start other music (another album, a playlist, another app), or with Reset in the Library's Up Next. Your list is only as long as what Spotify reported (about 20 songs); after it, Spotify carries on by itself.
 - **Local files** in the queue can't be handed to Spotify, so a queue containing them can't be edited.
 - **Songs you add in the Spotify app while LyricsBar keeps the list** don't show in LyricsBar's Up Next. Reset to see Spotify's queue again.
 - **LyricsBar has to be running**, and the Mac's Spotify app has to be the one playing, for the list to be followed.
+- **Not tested:** Spotify's own crossfade setting. With it on, the hand-over may come too late for a clean change.
 - **The queue Spotify reports can lag.** Up Next on the bar reloads when the song changes and every few seconds, but Spotify sometimes takes a moment to catch up.
 
 - **Apple Music**: uses the Music app through AppleScript.
