@@ -42,8 +42,11 @@ final class AirPlayMenu: NSObject, AVRoutePickerViewDelegate {
 /// button. Needs the Accessibility permission. What's picked there carries all of the Mac's sound.
 enum ControlCenterSound {
     static var trusted: Bool { AXIsProcessTrusted() }
-    /// Shows the system's "allow in Accessibility" dialog (macOS only shows it when not yet allowed).
+    /// Shows the system's "allow in Accessibility" dialog, once per launch.
+    private static var asked = false
     static func askPermission() {
+        guard !asked else { return }                 // once per launch: the dialog on every press is a nuisance
+        asked = true
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 

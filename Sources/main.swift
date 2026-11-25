@@ -3250,6 +3250,10 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    return
                                }
                                if c.hasPrefix("cast") {                   // opens the Cast list; writes what it shows after 4 s
+                                   if c.contains("ax") {                  // "cast ax": is the Accessibility permission there?
+                                       try? "accessibility: \(ControlCenterSound.trusted)".write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                       return
+                                   }
                                    if c.contains("self") {                // "cast self": move playback to the device it's already on
                                        libraryJSON(["spotify-devices"]) { obj, err in
                                            guard let id = (obj as? [[String: Any]])?.first(where: { $0["active"] as? Bool == true })?["id"] as? String else {
@@ -3264,7 +3268,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    self.view.openCast()
                                    DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
                                        let lines = self.view.picker.items.map { ($0.action == nil ? "- " : "> ") + $0.title }
-                                       try? (["picker: \(self.view.pickerMode)"] + lines).joined(separator: "\n")
+                                       try? (["picker: \(self.view.pickerMode)", "accessibility: \(ControlCenterSound.trusted)"] + lines).joined(separator: "\n")
                                            .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
                                    }
                                    return
