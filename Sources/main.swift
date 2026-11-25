@@ -471,6 +471,9 @@ final class StreamPlayer: NSObject, ObservableObject {
             timeObs.append(p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 10, preferredTimescale: 1), queue: .main) {
                 [weak self, weak p] _ in if p === self?.cur { self?.updateInfo(); self?.save() }
             })
+            timeObs.append(p.addPeriodicTimeObserver(forInterval: CMTime(seconds: 1, preferredTimescale: 10), queue: .main) {
+                [weak self, weak p] _ in if p === self?.cur { self?.writeClock() }
+            })
         }
         let m = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkCrossfade(); self?.trackListening() }
         RunLoop.main.add(m, forMode: .common)
@@ -906,6 +909,20 @@ final class StreamPlayer: NSObject, ObservableObject {
     }
 
     /// Publishes to the system Now Playing feed, so lyricsd / media keys / Control Center see it.
+    /// The exact clock for lyricsd (Now Playing reaches it late). Rewritten every second while playing too:
+    /// after a seek the player reports "playing" while the audio is still restarting, which left the
+    /// clock a few tenths of a second ahead until the next update.
+    func writeClock() {
+        guard tracks.indices.contains(index) else { return }
+        let t = tracks[index], pos = cur.currentTime().seconds
+        let clock: [String: Any] = ["bundle": Bundle.main.bundleIdentifier ?? "", "title": t.title, "artist": t.artist,
+                                    "album": t.album, "duration": t.duration, "position": pos.isFinite ? pos : 0,
+                                    "at": Date().timeIntervalSince1970, "rate": cur.timeControlStatus == .playing ? 1.0 : 0.0]
+        if let d = try? JSONSerialization.data(withJSONObject: clock) {
+            try? d.write(to: URL(fileURLWithPath: home + "/clock.json"), options: .atomic)
+        }
+    }
+
     func updateInfo() {
         guard tracks.indices.contains(index) else { return }
         let t = tracks[index]
@@ -918,13 +935,7 @@ final class StreamPlayer: NSObject, ObservableObject {
             MPNowPlayingInfoPropertyPlaybackRate: cur.timeControlStatus == .playing ? 1.0 : 0.0,
         ]
         if let a = artwork { info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: a.size) { _ in a } }
-        // the exact clock for lyricsd: Now Playing reaches it late and only to the second, so lyrics would lag
-        let clock: [String: Any] = ["bundle": Bundle.main.bundleIdentifier ?? "", "title": t.title, "artist": t.artist,
-                                    "album": t.album, "duration": t.duration, "position": pos.isFinite ? pos : 0, "at": Date().timeIntervalSince1970,
-                                    "rate": cur.timeControlStatus == .playing ? 1.0 : 0.0]
-        if let d = try? JSONSerialization.data(withJSONObject: clock) {
-            try? d.write(to: URL(fileURLWithPath: home + "/clock.json"), options: .atomic)
-        }
+        writeClock()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
     }
@@ -2946,6 +2957,12 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                }
                                if c.hasPrefix("menu") { self.view.openPicker() }
                                if c.hasPrefix("mutedtest") { self.mutedSelfTest() }
+                               if c.hasPrefix("ppos") {          // ppos = the built-in player's real position (debug.out)
+                                   let sp = StreamPlayer.shared
+                                   try? String(format: "%.3f %.3f %d", sp.player.currentTime().seconds, Date().timeIntervalSince1970,
+                                               sp.player.timeControlStatus.rawValue)
+                                       .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                               }
                                if c.hasPrefix("qstate") {
                                    let sp = StreamPlayer.shared
                                    try? "active=\(sp.active) n=\(sp.tracks.count) i=\(sp.index) title=\(sp.tracks.indices.contains(sp.index) ? sp.tracks[sp.index].title : "-") status=\(sp.player.currentItem?.status.rawValue ?? -1) tint=\(String(describing: self.view.likeBtn.contentTintColor)) liked=\(LikedCache.shared.ids.count)".write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)

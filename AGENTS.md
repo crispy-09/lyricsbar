@@ -75,6 +75,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `library <Section>` | Open a Library section (`Up Next`, `Lyrics`, `Search`, `Liked Songs`, `Albums`, `Artists`, `Playlists`, `Spotify`) |
 | `settings <Section>` | Open a Settings section (`General`, `Appearance`, `Providers`, `Discord`). Playlists, including pins and editing, live in `library Playlists` |
 | `qstate` | Write the queue state |
+| `ppos` | Write the built-in player's real position, wall time and `timeControlStatus` (to check lyric timing against `clock.json`) |
 | `viz` | Write the visualizer frames and levels |
 | `toast <text>`, `text <s>`, `qpreview` | UI checks |
 | `discordtest <socket>` / `discordtest off` | Turn presence on against a fake Discord socket (test app ID), then back off. This changes the config, so always run `off` afterwards |
