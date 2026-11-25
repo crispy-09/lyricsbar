@@ -91,7 +91,7 @@ Playlists are managed in the Library's **Playlists** section. Pinned playlists a
 - **Spotify**: create an app at developer.spotify.com with the redirect URI `http://127.0.0.1:8898/callback`, then paste its Client ID under Providers → Spotify. Playback happens in the Spotify app.
   - Up Next is editable on the Touch Bar and in the Library (needs Premium). See the quirks below.
   - Hold a playlist in the picker to queue it (up to 100 songs). This works for playlists you made, not ones you only follow.
-  - **Cast** (the AirPlay-style button behind ‹, placed under Appearance → buttons) lists your Spotify Connect devices; tap one to move playback there (needs Premium). Spotify's API only lists your phone, computers and speakers you've used before, not every speaker the Spotify app finds on your network; play to a new speaker from the Spotify app once and it shows up. Editing Up Next is only followed while the Mac's Spotify app is the one playing.
+  - **Cast** (an AirPlay-style button, off by default: turn it on under Appearance → buttons) lists your Spotify Connect devices; tap one to move playback there (needs Premium). Spotify's API only lists your phone, computers and speakers you've used before, not every speaker the Spotify app finds on your network; play to a new speaker from the Spotify app once and it shows up. Editing Up Next is only followed while the Mac's Spotify app is the one playing.
 
 #### Spotify queue quirks
 

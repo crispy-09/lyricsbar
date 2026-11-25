@@ -194,16 +194,16 @@ struct StripSlot: Codable, Equatable, Identifiable {
                                           "cast": "airplayaudio"]
     static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular", "cast"]
     static let defaults: [StripSlot] = order.map {
-        StripSlot(id: $0, place: ["brightness", "volume", "library"].contains($0) ? "bar" : $0 == "cast" ? "more" : "off")
+        StripSlot(id: $0, place: ["brightness", "volume", "library"].contains($0) ? "bar" : "off")
     }
 
-    /// Known buttons only, each once, missing ones appended (off; Cast, added later, goes behind ‹).
+    /// Known buttons only, each once, missing ones appended (off).
     static func normalized(_ l: [StripSlot]) -> [StripSlot] {
         var seen = Set<String>(), out: [StripSlot] = []
         for s in l where names[s.id] != nil && !seen.contains(s.id) && ["bar", "more", "off"].contains(s.place) {
             seen.insert(s.id); out.append(s)
         }
-        for id in order where !seen.contains(id) { out.append(StripSlot(id: id, place: id == "cast" ? "more" : "off")) }
+        for id in order where !seen.contains(id) { out.append(StripSlot(id: id, place: "off")) }
         return out
     }
 }
