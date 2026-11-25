@@ -611,16 +611,6 @@ struct ProvidersPane: View {
                     status: FileManager.default.fileExists(atPath: "/System/Applications/Music.app") ? "Uses the Music app" : "Not installed",
                     ready: FileManager.default.fileExists(atPath: "/System/Applications/Music.app"),
                     detail: "Lists your Music playlists and plays them in the Music app. macOS asks once to let LyricsBar control Music.")
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "waveform").frame(width: 22).foregroundStyle(.tertiary)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("TIDAL").foregroundStyle(.secondary)
-                        Text("Not available: the TIDAL Mac app can't be controlled by other apps. Lyrics and controls still work while it plays.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Toggle("", isOn: .constant(false)).labelsHidden().disabled(true)
-                }
             } header: {
                 Text("Shown in the Touch Bar picker").id(rev)
             } footer: {
