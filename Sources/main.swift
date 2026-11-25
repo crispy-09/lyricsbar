@@ -922,6 +922,13 @@ final class StreamPlayer: NSObject, ObservableObject {
             MPNowPlayingInfoPropertyPlaybackRate: cur.timeControlStatus == .playing ? 1.0 : 0.0,
         ]
         if let a = artwork { info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: a.size) { _ in a } }
+        // the exact clock for lyricsd: Now Playing reaches it late and only to the second, so lyrics would lag
+        let clock: [String: Any] = ["bundle": Bundle.main.bundleIdentifier ?? "", "title": t.title, "artist": t.artist,
+                                    "position": pos.isFinite ? pos : 0, "at": Date().timeIntervalSince1970,
+                                    "rate": cur.timeControlStatus == .playing ? 1.0 : 0.0]
+        if let d = try? JSONSerialization.data(withJSONObject: clock) {
+            try? d.write(to: URL(fileURLWithPath: home + "/clock.json"), options: .atomic)
+        }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
         MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
     }

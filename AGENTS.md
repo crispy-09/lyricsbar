@@ -40,6 +40,7 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `scripts/lyricsd.py`: the lyrics daemon.
   - It runs `media-control stream`, then writes `state.json`, `artwork.jpg` and `current.txt` (the current lyric line).
   - The Now Playing feed often doesn't announce seeks, so the app writes `seek.json` (`noteSeek`) on every seek and lyricsd resets its clock from it. The built-in player writes it again where the seek actually landed, and for 1.5 s lyricsd ignores Now Playing updates that disagree with the hint by more than 2 s (they were sent before the seek).
+  - While LyricsBar's own player is Now Playing, lyricsd times lyrics from `clock.json` (position, time, rate), which `StreamPlayer.updateInfo()` writes on every change. Now Playing reaches lyricsd late and only to the second, which left lyrics 1–3 s behind.
   - It caches LRC in `cache/<md5(artist|title)>.json`.
 - `Resources/`: `Info.plist` (bump `CFBundleShortVersionString` for releases; `install.sh` prints old → new) and `AppIcon.icns`.
   - The icon is drawn in code by `Resources/icon/make_icon.swift`. Regenerate the `.icns` with `Resources/icon/make_icns.sh`.

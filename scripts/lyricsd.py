@@ -191,7 +191,7 @@ def _stream():
                 # timestamp only has 1s resolution: trust arrival time for fresh events
                 anchor = now if ts is None or now - ts < 1.5 else ts + 0.5
                 try:
-                    st = dict(track=p["title"], artist=p.get("artist", ""),
+                    st = dict(track=p["title"], artist=p.get("artist", ""), bundle=p.get("bundleIdentifier", ""),
                               album=p.get("album", ""), duration=float(p.get("duration") or 0),
                               position=float(p.get("elapsedTime") or 0),
                               rate=0.0 if paused else float(p.get("playbackRate") or 1))
@@ -215,6 +215,25 @@ def _stream():
                     pass
         time.sleep(2)
 
+CLOCK = os.path.join(HOME, "clock.json")
+_clock = {"mtime": None, "value": None}
+
+def _own_clock():
+    """LyricsBar's built-in player writes its exact position on every change (Now Playing lags behind)."""
+    try:
+        m = os.stat(CLOCK).st_mtime
+    except OSError:
+        return None
+    if m != _clock["mtime"]:
+        _clock["mtime"] = m
+        try:
+            with open(CLOCK) as f:
+                c = json.load(f)
+            _clock["value"] = (c["bundle"], c["title"], float(c["position"]), float(c["at"]), float(c["rate"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            _clock["value"] = None
+    return _clock["value"]
+
 def now_playing():
     with _lock:
         st = _np["state"]
@@ -222,7 +241,10 @@ def now_playing():
             return None
         st = dict(st)
         st["position"] += (time.time() - _np["anchor"]) * st["rate"]
-        return st
+    c = _own_clock()
+    if c and c[0] and c[0] == st.get("bundle") and c[1] == st["track"]:
+        st["position"] = c[2] + (time.time() - c[3]) * c[4]   # it's LyricsBar playing: use its own clock
+    return st
 
 SEEK = os.path.join(HOME, "seek.json")
 
