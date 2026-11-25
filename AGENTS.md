@@ -76,6 +76,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `library <Section>` | Open a Library section (`Up Next`, `Lyrics`, `Search`, `Liked Songs`, `Albums`, `Artists`, `Playlists`, `Spotify`) |
 | `settings <Section>` | Open a Settings section (`General`, `Appearance`, `Providers`, `Discord`). Playlists, including pins and editing, live in `library Playlists` |
 | `qstate` | Write the queue state |
+| `skiptime`, `skiptime cold` | Skip to the next song and write how long its audio took to start; `cold` drops the preloaded song first, for comparison. **Changes playback**, so mute first |
 | `seektest` | Seek accuracy self-test for the current song (about a minute, muted, on a separate player): compares the audio after each seek with a straight decode of the same file and writes how far it is from the time the player reports. Runs once as LyricsBar plays it (`StreamPlayer.asset`) and once with a plain `AVURLAsset` |
 | `ppos` | Write the built-in player's real position, wall time and `timeControlStatus` (to check lyric timing against `clock.json`) |
 | `viz` | Write the visualizer frames and levels |
@@ -105,6 +106,7 @@ Screenshots:
 
 ## Touch Bar quirks
 
+- **The next song is preloaded.** `StreamPlayer.ensurePreload()` (from the 0.25 s monitor) keeps the idle `AVPlayer` holding the song after the current one, paused, with a 20 s buffer. `playCurrent()` and `startCrossfade()` switch to it via `adoptPreload(for:)` when its `uid` matches; otherwise they load a fresh item. During a crossfade the idle player is the outgoing song, so nothing is preloaded then.
 - **Player items need precise timing.** `StreamPlayer.asset()` sets `AVURLAssetPreferPreciseDurationAndTimingKey`. Without it, AVPlayer seeks by estimate: on FLAC streams the audio landed up to 11 s away from the time the player reported, so lyrics and the scrubber were off after every seek. `seektest` measures it.
 
 - `NSButton.contentTintColor` is ignored on the Touch Bar. Use `coloredSymbol(name, size, color)`, which bakes the colour in with `isTemplate = false`.

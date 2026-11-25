@@ -475,7 +475,9 @@ final class StreamPlayer: NSObject, ObservableObject {
                 [weak self, weak p] _ in if p === self?.cur { self?.writeClock() }
             })
         }
-        let m = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkCrossfade(); self?.trackListening() }
+        let m = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.checkCrossfade(); self?.trackListening(); self?.ensurePreload()
+        }
         RunLoop.main.add(m, forMode: .common)
         monitor = m
         let rc = MPRemoteCommandCenter.shared()
@@ -508,10 +510,85 @@ final class StreamPlayer: NSObject, ObservableObject {
     func playCurrent() {
         cancelFade()
         guard tracks.indices.contains(index) else { stop(); return }
+        if adoptPreload(for: index) {
+            // already loaded in the idle player: switch to it and let go of the old one
+            let old = cur
+            cur = other
+            old.pause(); old.replaceCurrentItem(with: nil); old.volume = 1
+        } else {
+            cur.replaceCurrentItem(with: makeItem(tracks[index].stream))
+        }
         cur.volume = 1
-        cur.replaceCurrentItem(with: makeItem(tracks[index].stream))
         cur.play()
         trackChanged()
+    }
+
+    // MARK: preloading the next song
+    // While a song plays, the one after it is loaded (paused, silent) into the idle player, so a skip, a
+    // crossfade or the end of the song starts it at once instead of waiting for the stream to open.
+
+    private var preloaded: (uid: UUID, item: AVPlayerItem)?
+    private var preObs: NSKeyValueObservation?
+    private var preloadFailed: (uid: UUID, until: Date)?        // don't hammer a song (or server) that won't load
+
+    /// Keeps the idle player holding whatever follows the current song. Called from the monitor timer, so it
+    /// follows queue edits, shuffle and repeat changes by itself.
+    private func ensurePreload() {
+        guard active, isPlaying, fade == nil, let n = followingIndex, n != index, tracks.indices.contains(n),
+              cur.currentItem?.isPlaybackLikelyToKeepUp == true          // the current song gets the network first
+        else { if !active || fade != nil { forgetPreload() }; return }
+        let t = tracks[n]
+        if preloaded?.uid == t.uid { return }
+        if let f = preloadFailed, f.uid == t.uid, Date() < f.until { return }
+        let item = makeItem(t.stream, watch: false)
+        item.preferredForwardBufferDuration = 20                          // enough to start; the rest loads once it plays
+        let uid = t.uid
+        preObs = item.observe(\.status) { [weak self] it, _ in
+            DispatchQueue.main.async {
+                guard let self, it.status == .failed else { return }
+                if it === self.cur.currentItem { self.skipAfterFailure(); return }
+                guard self.preloaded?.item === it else { return }
+                // couldn't preload: skipping falls back to loading it fresh; try again later
+                self.preloadFailed = (uid, Date().addingTimeInterval(30))
+                self.preloaded = nil; self.preObs = nil
+                if self.fade == nil { self.other.replaceCurrentItem(with: nil) }
+            }
+        }
+        other.volume = 1
+        other.replaceCurrentItem(with: item)
+        preloaded = (uid, item)
+    }
+
+    /// True if the idle player already holds track `i` (which then stops being "the preload").
+    private func adoptPreload(for i: Int) -> Bool {
+        guard let p = preloaded, tracks.indices.contains(i), tracks[i].uid == p.uid,
+              other.currentItem === p.item, p.item.status != .failed else { return false }
+        p.item.preferredForwardBufferDuration = 0
+        itemObs = preObs; preObs = nil            // its failure handling moves with it
+        if p.item.status == .readyToPlay { failStreak = 0 }
+        preloaded = nil
+        return true
+    }
+
+    /// The idle player is about to be used for something else (or was just cleared).
+    private func forgetPreload() { preloaded = nil; preObs = nil }
+
+    /// Debug (`skiptime` / `skiptime cold`): skips to the next song and reports how long until its audio
+    /// clock moves; `cold` throws the preload away first, to compare.
+    func debugSkipTime(cold: Bool, done: @escaping (String) -> Void) {
+        let had = preloaded != nil
+        if cold, fade == nil { forgetPreload(); other.replaceCurrentItem(with: nil); preloadFailed = nil }
+        let t0 = Date()
+        skipNext()
+        let p = cur
+        let t = Timer(timeInterval: 0.005, repeats: true) { timer in
+            let dt = Date().timeIntervalSince(t0)
+            let pos = p.currentTime().seconds
+            guard (p.timeControlStatus == .playing && pos.isFinite && pos > 0.02) || dt > 20 else { return }
+            timer.invalidate()
+            done(String(format: "%@ preload=%@ → %.0f ms", cold ? "cold" : "warm", cold ? "dropped" : (had ? "ready" : "none"), dt * 1000))
+        }
+        RunLoop.main.add(t, forMode: .common)
     }
 
     // MARK: queue editing (Touch Bar Up Next + Library window)
@@ -687,7 +764,10 @@ final class StreamPlayer: NSObject, ObservableObject {
         if n == index { resetListening() }          // repeat-all on a one-song queue: a new listen
         index = n
         inn.volume = 0
-        inn.replaceCurrentItem(with: makeItem(tracks[index].stream))
+        if !adoptPreload(for: n) {
+            forgetPreload()
+            inn.replaceCurrentItem(with: makeItem(tracks[index].stream))
+        }
         inn.play()
         cur = inn                 // Now Playing / lyrics switch to the incoming song right away
         trackChanged()
@@ -758,9 +838,10 @@ final class StreamPlayer: NSObject, ObservableObject {
     static func asset(_ url: URL) -> AVURLAsset {
         AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
     }
-    private func makeItem(_ url: URL) -> AVPlayerItem {
+    private func makeItem(_ url: URL, watch: Bool = true) -> AVPlayerItem {
         let it = AVPlayerItem(asset: Self.asset(url))
         attachVisualizerTap(to: it)
+        guard watch else { return it }            // a preload: watched separately until it becomes the song
         itemObs = it.observe(\.status) { [weak self] it, _ in
             DispatchQueue.main.async {
                 guard let self, it === self.cur.currentItem else { return }
@@ -908,6 +989,7 @@ final class StreamPlayer: NSObject, ObservableObject {
         cancelFade()
         cur.pause()
         cur.replaceCurrentItem(with: nil)
+        forgetPreload(); other.replaceCurrentItem(with: nil)
         tracks = []
         setCommands(false)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
@@ -2964,6 +3046,12 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                if c.hasPrefix("menu") { self.view.openPicker() }
                                if c.hasPrefix("mutedtest") { self.mutedSelfTest() }
                                if c.hasPrefix("seektest") { SeekTest.run(out: home + "/debug.out"); return }
+                               if c.hasPrefix("skiptime") {      // skiptime [cold] = time a skip takes to produce audio
+                                   StreamPlayer.shared.debugSkipTime(cold: c.contains("cold")) {
+                                       try? $0.write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                   }
+                                   return
+                               }
                                if c.hasPrefix("ppos") {          // ppos = the built-in player's real position (debug.out)
                                    let sp = StreamPlayer.shared
                                    try? String(format: "%.3f %.3f %d", sp.player.currentTime().seconds, Date().timeIntervalSince1970,
