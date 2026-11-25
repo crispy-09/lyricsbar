@@ -1612,8 +1612,9 @@ final class BarView: NSView {
     private var swipeGeo: (start: CGFloat, rest: CGFloat)?
     static let swipeLand: CGFloat = 110                // drag that brings the preview to its place
     static let swipeHitch: CGFloat = 90                // ↶ holds in place for this much pull before the previous song
-    static let swipePrevLand: CGFloat = 90             // then the previous song follows the finger in over this much
+    static let swipePrevLand: CGFloat = 50             // then the previous song follows the finger in over this much
     private var swipeShown: SwipeTarget?
+    static let swipeGap: CGFloat = 48                  // space between the current text and the incoming one
     private var swipeExtra: CGFloat = 0                // extra push on the current text when a wider title takes ↶'s place
     private let swipeMask = CALayer()                  // keeps the dragged text off the cover and buttons
 
@@ -1725,12 +1726,23 @@ final class BarView: NSView {
         }
         swipeTarget = target
         let tg = geo(target)
-        swipeExtra = 0
-        lyric.layer?.setAffineTransform(CGAffineTransform(translationX: eff, y: 0))
-        // the preview's left edge on the bar, and where it started from
-        let start = prevIn != nil ? tg.rest - Self.swipePrevLand : tg.rest - reach
-        let px = start + (prevIn ?? eff)
-        placeSwipeMask(eff, cut: toNext ? (px - 14, true) : (px + tg.w + 14, false))
+        // the preview starts clear of the current text (past its end) and reaches its place after `swipeLand`,
+        // however long either title is; the current text follows the finger and is pushed only to keep the gap
+        let cur = lyric.attributedStringValue
+        let curLeft = lyric.frame.minX + (textStartX(cur) ?? 2)
+        let curW = textStartX(cur) != nil ? ceil(cur.size().width) : lyric.bounds.width - 4
+        let gap = Self.swipeGap
+        let start: CGFloat, px: CGFloat
+        if let s = prevIn {
+            start = tg.rest - Self.swipePrevLand; px = start + s
+        } else {
+            start = toNext ? max(tg.rest - reach, curLeft + curW + gap) : min(tg.rest - reach, curLeft - gap - tg.w)
+            px = start + (tg.rest - start) * min(1, eff / reach) + (past ? eff - reach : 0)
+        }
+        let tx = toNext ? min(eff, px - gap - curW - curLeft) : max(eff, px + tg.w + gap - curLeft)
+        swipeExtra = tx - (px - start)                     // landing: the text keeps its distance from the preview
+        lyric.layer?.setAffineTransform(CGAffineTransform(translationX: tx, y: 0))
+        placeSwipeMask(tx)
         lyric.alphaValue = max(0, 1 - abs(eff) / Self.swipeLand)
         let a = swipeText(target)
         if swipeShown != target {
@@ -1744,7 +1756,7 @@ final class BarView: NSView {
         swipeGeo = (start, tg.rest)                         // landing moves everything by what's left
         swipePreview.frame = NSRect(x: px - swipeClip.frame.minX, y: lyric.frame.minY,
                                     width: tg.w, height: lyric.frame.height)
-        var alpha = min(1, (prevIn ?? abs(dx)) / 60)
+        var alpha = min(1, (prevIn ?? abs(dx)) / 40)
         if target == .restart, swipeRestartable, swipePrevSong != nil {
             // ↶ fades over the second half of the hitch, so the previous song comes in on a clear line
             let h = Self.swipeHitch / 2
