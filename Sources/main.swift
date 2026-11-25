@@ -1540,6 +1540,23 @@ final class BarView: NSView {
         return lyricCentered ? (lyric.bounds.width - w) / 2 : 2
     }
     /// Slides the label's new text in from `dx` points away while the previous text fades out.
+    /// Switches the lyric between centred and left-aligned, sliding the text across instead of jumping.
+    func slideLyricAlignment(left: Bool) {
+        layoutSubtreeIfNeeded()
+        let start = { self.lyric.frame.minX + (self.textStartX(self.lyric.attributedStringValue) ?? 2) }
+        let from = start()
+        forceLeft = left
+        applyVisualizer()
+        realignLyric()
+        layoutSubtreeIfNeeded()
+        let dx = from - start()
+        guard abs(dx) > 1, !lyric.isHidden else { return }
+        let m = CABasicAnimation(keyPath: "transform.translation.x")
+        m.fromValue = dx; m.toValue = 0; m.duration = 0.35
+        m.timingFunction = .init(name: .easeInEaseOut)
+        lyric.layer?.add(m, forKey: "align")
+    }
+
     func glideLyric(from dx: CGFloat) {
         lyric.layer?.masksToBounds = true
         let f = CATransition(); f.type = .fade; f.duration = 0.3
@@ -2140,9 +2157,16 @@ final class BarView: NSView {
     func applyStripButtons() {
         let layout = StripSlot.normalized(cfg.stripLayout)
         let usable = { (s: StripSlot) in s.id != "keyboard" || KeyboardLight.available }
-        let extras = layout.contains { $0.place == "more" && usable($0) }
-        if !extras && stripExpanded { stripExpanded = false; forceLeft = false; applyVisualizer() }
-        let views = [moreBtn as NSView] + layout.compactMap { stripButtons[$0.id] }
+        let extras = cfg.stripExpand != "off" && layout.contains { $0.place == "more" && usable($0) }
+        if !extras && stripExpanded { stripExpanded = false; forceLeft = false; applyVisualizer(); realignLyric() }
+        let views: [NSView]
+        if cfg.stripExpand == "inline" {
+            views = [moreBtn] + layout.compactMap { stripButtons[$0.id] }
+        } else {
+            // outward: the bar's buttons stay put, extras open to the left of ‹
+            let ids = { (p: String) in layout.filter { $0.place == p }.compactMap { self.stripButtons[$0.id] } }
+            views = ids("more") + [moreBtn] + ids("bar") + ids("off")
+        }
         if strip.stack.arrangedSubviews != views {
             for v in views { strip.stack.removeArrangedSubview(v); v.removeFromSuperview(); strip.stack.addArrangedSubview(v) }
         }
@@ -2169,15 +2193,19 @@ final class BarView: NSView {
             }
         }
         guard on != stripExpanded else { return }
-        stripExpanded = on
-        forceLeft = on
-        NSAnimationContext.runAnimationGroup { c in
-            c.duration = 0.25; c.allowsImplicitAnimation = true
-            applyStripButtons()
-            applyVisualizer()
-            realignLyric()
-            layoutSubtreeIfNeeded()
+        let expandStrip = {
+            self.stripExpanded = on
+            NSAnimationContext.runAnimationGroup { c in
+                c.duration = 0.25; c.allowsImplicitAnimation = true
+                self.applyStripButtons()
+                self.layoutSubtreeIfNeeded()
+            }
         }
+        // opening: the text slides to the left edge first, then the buttons open (and the reverse on close),
+        // so the text never jumps while the label resizes
+        if !on { expandStrip() }
+        slideLyricAlignment(left: on)
+        if on { expandStrip() }
         if !on {
             if restore && restoreMediaAfterStrip && !mediaMode && !pickerMode { setMediaMode(true) }
             restoreMediaAfterStrip = false

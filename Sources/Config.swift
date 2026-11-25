@@ -34,6 +34,7 @@ struct Config: Codable, Equatable {
     // Touch Bar
     /// The right-hand buttons, in order. place: "bar" (always shown), "more" (behind the ‹ button), "off".
     var stripLayout: [StripSlot] = StripSlot.defaults
+    var stripExpand = "outward"       // ‹ opens "outward" (extras appear to its left) | "inline" (in list order) | "off"
     var barHidden = false             // LyricsBar is off the Touch Bar (the ♪ in the Control Strip brings it back)
     var playingShows = "lyrics"       // while playing: "lyrics" | "controls" | "title"
     var mediaAutoHide = 8.0

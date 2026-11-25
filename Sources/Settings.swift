@@ -227,7 +227,7 @@ struct AppearancePane: View {
                 }
                 .pickerStyle(.segmented)
                 StripLayoutEditor()
-                Text("Buttons \u{201C}Behind ‹\u{201D} appear when you tap ‹ on the bar. The regular Touch Bar keeps a ♪ in its Control Strip: tap it to bring LyricsBar back (the menu bar icon can switch too). The style also applies to the playlist picker and Up Next.")
+                Text("The top of the list is the right end of the bar. Buttons \u{201C}Behind ‹\u{201D} appear when you tap ‹: outward opens them to its left without moving the others; in place keeps the list order. With the expander off they're hidden. The regular Touch Bar keeps a ♪ in its Control Strip: tap it to bring LyricsBar back (the menu bar icon can switch too). The style also applies to the playlist picker and Up Next.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Extras") {
@@ -803,7 +803,11 @@ struct StripLayoutEditor: View {
     @ObservedObject var store = ConfigStore.shared
     var body: some View {
         let layout = StripSlot.normalized(store.c.stripLayout)
-        ForEach(Array(layout.enumerated()), id: \.element.id) { i, slot in
+        Picker("‹ Expander", selection: $store.c.stripExpand) {
+            Text("Opens outward").tag("outward"); Text("Opens in place").tag("inline"); Text("Off").tag("off")
+        }
+        // top of the list = right end of the bar
+        ForEach(Array(layout.enumerated().reversed()), id: \.element.id) { i, slot in
             HStack(spacing: 8) {
                 Image(systemName: StripSlot.icons[slot.id] ?? "questionmark").frame(width: 22)
                 Text(StripSlot.names[slot.id] ?? slot.id)
@@ -811,14 +815,16 @@ struct StripLayoutEditor: View {
                 Picker("", selection: Binding(
                     get: { slot.place },
                     set: { v in var l = layout; l[i].place = v; store.c.stripLayout = l })) {
-                    Text("On the bar").tag("bar"); Text("Behind ‹").tag("more"); Text("Off").tag("off")
+                    Text("On the bar").tag("bar")
+                    Text("Behind ‹").tag("more").disabled(store.c.stripExpand == "off")
+                    Text("Off").tag("off")
                 }
                 .labelsHidden().frame(width: 130)
                 .disabled(slot.id == "keyboard" && !KeyboardLight.available)
-                Button { move(layout, i, -1) } label: { Image(systemName: "chevron.up") }
-                    .buttonStyle(.borderless).disabled(i == 0).help("Move left")
-                Button { move(layout, i, 1) } label: { Image(systemName: "chevron.down") }
+                Button { move(layout, i, 1) } label: { Image(systemName: "chevron.up") }
                     .buttonStyle(.borderless).disabled(i == layout.count - 1).help("Move right")
+                Button { move(layout, i, -1) } label: { Image(systemName: "chevron.down") }
+                    .buttonStyle(.borderless).disabled(i == 0).help("Move left")
             }
         }
     }
