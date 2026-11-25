@@ -85,6 +85,7 @@ enum Subsonic {
         guard Creds.set("subsonic", ["server": a.server, "u": a.u, "t": a.t, "s": a.s]) else {
             throw SubsonicError(message: "Signed in, but couldn't save the login to the Keychain")
         }
+        ConfigStore.shared.claimDefault("subsonic")
     }
 
     static func url(_ endpoint: String, _ params: [(String, String)] = [], json: Bool = true, auth a: SubsonicAuth? = nil) -> URL? {

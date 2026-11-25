@@ -57,7 +57,8 @@ struct Config: Codable, Equatable {
     var reportPlays = true            // scrobble LyricsBar's Subsonic plays to the server
     var scrobbleLastfm = false        // scrobble directly from LyricsBar (needs lastfm.json)
     var scrobbleListenBrainz = false  // scrobble directly from LyricsBar (needs listenbrainz.json)
-    var defaultApp = "subsonic"       // ▶ with nothing loaded: "subsonic" | "spotify" | "applemusic" | "ask"
+    var defaultApp = ""               // ▶ with nothing loaded: "subsonic" | "spotify" | "applemusic" | "ask";
+                                      // "" until chosen: the first service connected becomes the default
     var lyricTapAction = "pause"      // tap on the lyrics: "pause" | "controls" | "none"
     var lyricHoldAction = "controls"  // long-press on the lyrics: same choices
     // While paused (Settings → General)
@@ -143,6 +144,20 @@ final class ConfigStore: ObservableObject {
     private static func decode(_ d: [String: Any]) -> Config? {
         guard let data = try? JSONSerialization.data(withJSONObject: d) else { return nil }
         return try? JSONDecoder().decode(Config.self, from: data)
+    }
+
+    /// The first service the user connects becomes the default player (if none was chosen yet).
+    func claimDefault(_ app: String) {
+        DispatchQueue.main.async { if self.c.defaultApp.isEmpty { self.c.defaultApp = app } }
+    }
+    /// The app the default player plays in (nil: none chosen, or "ask").
+    var defaultBundle: String? {
+        switch c.defaultApp {
+        case "subsonic": return Bundle.main.bundleIdentifier
+        case "spotify": return "com.spotify.client"
+        case "applemusic": return "com.apple.Music"
+        default: return nil
+        }
     }
 
     func save() {

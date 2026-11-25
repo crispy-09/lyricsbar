@@ -63,13 +63,15 @@ struct GeneralPane: View {
     var body: some View {
         Form {
             Section("Playback") {
-                Picker("When nothing is loaded, ▶ starts", selection: $store.c.defaultApp) {
+                Picker("Default player", selection: $store.c.defaultApp) {
+                    if store.c.defaultApp.isEmpty { Text("The first service you connect").tag("") }
                     Text("Subsonic").tag("subsonic"); Text("Spotify").tag("spotify")
                     Text("Apple Music").tag("applemusic"); Text("Nothing (open the picker)").tag("ask")
                 }
-                Text(store.c.defaultApp == "subsonic"
-                     ? "Resumes your last LyricsBar queue, or shuffles your Liked Songs."
-                     : "Also stops macOS from opening Apple Music when you press play with nothing loaded.")
+                Text((store.c.defaultApp == "subsonic"
+                     ? "▶ with nothing loaded resumes your last LyricsBar queue, or shuffles your Liked Songs."
+                     : "What ▶ starts when nothing is loaded. Also stops macOS from opening Apple Music.")
+                     + " When LyricsBar starts, a paused song left in another app doesn't take over the bar.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Shuffle Subsonic playlists by default", isOn: $store.c.defaultShuffle)
                 Toggle("Pause other players when starting a playlist", isOn: $store.c.pauseOthers)
@@ -560,7 +562,7 @@ struct AccountsSections: View {
                 status = "Failed: couldn't save the login to the Keychain (allow LyricsBar access and try again)"
             } else if Creds.get("spotify") == nil {
                 status = "Failed: the sign-in didn't return a login"
-            }
+            } else { ConfigStore.shared.claimDefault("spotify") }
             DispatchQueue.main.async {
                 spBusy = false
                 spStatus = status
@@ -627,6 +629,7 @@ struct ProvidersPane: View {
             AccountsSections(changed: { rev += 1 })
         }
         .formStyle(.grouped)
+        .onChange(of: store.c.showAppleMusic) { _, on in if on { store.claimDefault("applemusic") } }
         .navigationTitle("Providers")
     }
 

@@ -104,6 +104,7 @@ Screenshots:
 - Touches only carry horizontal movement. There's no vertical swipe information.
 - The system-modal window is 1004pt wide but `BarView` is 1000pt. `BarView.layout()` compensates so centred lyrics stay centred.
 - macOS only lists an app as Now Playing after it has produced sound. Until then, `App.useOwnPlayerFallback()` drives the bar from `StreamPlayer` directly. The Library footer does the same thing.
+- `NowPlayingFilter`: a *paused* Now Playing item from another app that hasn't played since LyricsBar started (e.g. Music's leftover item after a restart) is ignored, unless that app is the default player (`defaultApp`). The bar and transport then behave as if nothing were loaded. `defaultApp` starts empty; the first service connected claims it (`ConfigStore.claimDefault`).
 - An accessory app needs an Edit menu in `NSApp.mainMenu` for ⌘V to work in text fields (`installMainMenu()`).
 
 ## Security rules

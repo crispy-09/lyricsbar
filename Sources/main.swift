@@ -918,13 +918,25 @@ func playSongs(_ songs: [SSong], start: Int = 0, shuffle: Bool = false) {
 // straight to LyricsBar's own player when it holds the queue, and "play" with nothing loaded
 // starts the default app chosen in Settings.
 
+/// A paused song another app left behind (e.g. Music after a restart) shouldn't take over the bar: until that
+/// app plays while LyricsBar runs, it's ignored unless it's the default player.
+enum NowPlayingFilter {
+    static var seenPlaying = Set<String>()
+    static func ignored(_ j: [String: Any]) -> Bool {
+        let bundle = j["bundle"] as? String ?? ""
+        if j["playing"] as? Bool ?? false { seenPlaying.insert(bundle); return false }
+        guard !bundle.isEmpty, bundle != Bundle.main.bundleIdentifier, !seenPlaying.contains(bundle) else { return false }
+        return bundle != ConfigStore.shared.defaultBundle
+    }
+}
+
 private var systemStateCache: (at: Date, value: (playing: Bool, bundle: String, title: String))?
 func systemState() -> (playing: Bool, bundle: String, title: String) {
     // called several times per tick: one read per 100 ms is plenty
     if let c = systemStateCache, Date().timeIntervalSince(c.at) < 0.1 { return c.value }
     var v: (playing: Bool, bundle: String, title: String) = (false, "", "")
     if let d = FileManager.default.contents(atPath: home + "/state.json"),
-       let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+       let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], !NowPlayingFilter.ignored(j) {
         v = (j["playing"] as? Bool ?? false, j["bundle"] as? String ?? "", j["title"] as? String ?? "")
     }
     systemStateCache = (Date(), v)
@@ -2727,6 +2739,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         }
     }
     var titleChangedAt = Date()
+    var npIgnored = false          // Now Playing is a stale paused app (NowPlayingFilter)
     var outroFor = ""              // song we've already shown the end-of-song card for
     var stoppedSince: Date?
     var signalSources: [DispatchSourceSignal] = []
@@ -3124,8 +3137,10 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     func tick() {
         DiscordPresence.shared.tick()
         if let d = FileManager.default.contents(atPath: home + "/state.json"), d != lastState,
-           let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+           let raw = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
             lastState = d
+            npIgnored = NowPlayingFilter.ignored(raw)
+            let j: [String: Any] = npIgnored ? [:] : raw         // a stale paused app: as if nothing were playing
             view.setPlaying(j["playing"] as? Bool ?? false)
             view.bundleId = j["bundle"] as? String ?? ""
             view.duration = j["duration"] as? Double ?? 0
@@ -3148,7 +3163,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             }
         }
         useOwnPlayerFallback()
-        if let s = try? String(contentsOfFile: home + "/current.txt", encoding: .utf8) {
+        if !npIgnored, let s = try? String(contentsOfFile: home + "/current.txt", encoding: .utf8) {
             let line = s.trimmingCharacters(in: .whitespacesAndNewlines)
             // no lyrics: lyricsd writes "♪ Title — Artist"; keep the title display instead
             let noLyrics = "♪ \(lastTitle) — \(lastArtist)".trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3158,7 +3173,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         view.updateScrubber()
         let artPath = home + "/artwork.jpg"
         let m = (try? FileManager.default.attributesOfItem(atPath: artPath)[.modificationDate]) as? Date
-        if m != lastArtMtime {
+        if m != lastArtMtime, !npIgnored {
             lastArtMtime = m
             if m != nil, let img = NSImage(contentsOfFile: artPath) {
                 view.setArtwork(img)
