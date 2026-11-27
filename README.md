@@ -22,7 +22,7 @@ Synced lyrics, album art and media controls on the MacBook Pro Touch Bar, plus a
 
 LyricsBar takes over the Touch Bar's control strip area with:
 
-- **Live, line-synced lyrics** for whatever is playing (Spotify, Apple Music, browsers, LyricsBar's own player, any app that reports Now Playing to macOS). Lyrics come from [LRCLIB](https://lrclib.net).
+- **Live, line-synced lyrics** for whatever is playing (Spotify, Apple Music, browsers, LyricsBar's own player, any app that reports Now Playing to macOS). Lyrics come from [LRCLIB](https://lrclib.net). A browser's video leaves the bar a few seconds after it's paused or closed, and the bar goes back to LyricsBar's own queue.
 - **Album art** and a background that takes its colour from the cover, with an optional audio visualizer.
 - **Media controls**: a scrubber, skip, like, shuffle/repeat, and a swipeable, reorderable Up Next queue.
 - **A playlist picker** for Subsonic, Spotify and Apple Music, with pinned playlists.

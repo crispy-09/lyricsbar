@@ -1135,11 +1135,25 @@ func playSongs(_ songs: [SSong], start: Int = 0, shuffle: Bool = false) {
 
 /// A paused song another app left behind (e.g. Music after a restart) shouldn't take over the bar: until that
 /// app plays while LyricsBar runs, it's ignored unless it's the default player.
+///
+/// A browser keeps its last video (or a thumbnail preview) as the Now Playing item long after it stopped, so a
+/// paused browser item is dropped after a few seconds and the bar goes back to LyricsBar's own queue, or to idle.
 enum NowPlayingFilter {
     static var seenPlaying = Set<String>()
+    static let browserPauseGrace = 5.0
+    static var browserPaused: (key: String, at: Date)?
+    static var recheckAt: Date?                 // when a paused browser item runs out: the bar must look again then
     static func ignored(_ j: [String: Any]) -> Bool {
         let bundle = j["bundle"] as? String ?? ""
-        if j["playing"] as? Bool ?? false { seenPlaying.insert(bundle); return false }
+        if j["playing"] as? Bool ?? false { seenPlaying.insert(bundle); browserPaused = nil; recheckAt = nil; return false }
+        if DiscordPresence.isBrowser(bundle) {
+            let key = bundle + "|" + (j["title"] as? String ?? "")
+            if browserPaused?.key != key {
+                browserPaused = (key, Date())
+                recheckAt = Date().addingTimeInterval(browserPauseGrace + 0.05)
+            }
+            if let p = browserPaused, Date().timeIntervalSince(p.at) > browserPauseGrace { return true }
+        } else { browserPaused = nil; recheckAt = nil }
         guard !bundle.isEmpty, bundle != Bundle.main.bundleIdentifier, !seenPlaying.contains(bundle) else { return false }
         return bundle != ConfigStore.shared.defaultBundle
     }
@@ -3571,6 +3585,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
 
     func tick() {
         DiscordPresence.shared.tick()
+        if let due = NowPlayingFilter.recheckAt, Date() >= due { NowPlayingFilter.recheckAt = nil; lastState = Data() }
         if let d = FileManager.default.contents(atPath: home + "/state.json"), d != lastState,
            let raw = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
             lastState = d
