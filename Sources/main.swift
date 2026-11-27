@@ -1310,8 +1310,34 @@ final class ScrubBar: NSView {
 
 // MARK: - Picker (providers → playlists), a horizontally scrolling Touch Bar list
 
+/// A picker item with a picture: cover or app icon on the left, the title in small text beside it.
+final class PickerImageItem: NSScrubberItemView {
+    static let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    private let icon = NSImageView(), label = NSTextField(labelWithString: "")
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        icon.wantsLayer = true; icon.layer?.cornerRadius = 4; icon.layer?.masksToBounds = true
+        label.font = Self.font; label.textColor = .white; label.lineBreakMode = .byTruncatingTail
+        for v in [icon, label] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; addSubview(v) }
+        NSLayoutConstraint.activate([
+            icon.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8), icon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 22), icon.heightAnchor.constraint(equalToConstant: 22),
+            label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 8), label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    func set(_ img: NSImage, _ title: String, pill: Bool) {
+        icon.image = img; label.stringValue = title
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(pill ? 0.14 : 0).cgColor
+    }
+}
+
 final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubberFlowLayoutDelegate {
-    struct Item { let title: String; var dim = false; var hold: (() -> Void)? = nil; let action: (() -> Void)? }
+    struct Item { let title: String; var dim = false; var image: NSImage? = nil; var hold: (() -> Void)? = nil; let action: (() -> Void)? }
     private var suppressSelectUntil = Date.distantPast
     let scrubber = NSScrubber()
     var items: [Item] = [] { didSet { scrubber.reloadData(); if !items.isEmpty { scrubber.scrollItem(at: 0, to: .none) } } }
@@ -1335,6 +1361,7 @@ final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubb
         wantsLayer = true
         layer?.cornerRadius = 8; layer?.masksToBounds = true
         scrubber.register(NSScrubberTextItemView.self, forItemIdentifier: .init("t"))
+        scrubber.register(PickerImageItem.self, forItemIdentifier: .init("i"))
         fill(scrubber, in: self)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -1342,6 +1369,11 @@ final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubb
     func numberOfItems(for s: NSScrubber) -> Int { items.count }
 
     func scrubber(_ s: NSScrubber, viewForItemAt i: Int) -> NSScrubberItemView {
+        if let img = items[i].image {              // a cover or app icon, then the title in small text
+            let v = s.makeItem(withIdentifier: .init("i"), owner: nil) as! PickerImageItem
+            v.set(img, items[i].title, pill: cfg.buttonStyle == "pill")
+            return v
+        }
         let v = s.makeItem(withIdentifier: .init("t"), owner: nil) as! NSScrubberTextItemView
         v.title = items[i].title
         v.textField.font = font
@@ -1354,6 +1386,10 @@ final class TBPicker: NSView, NSScrubberDataSource, NSScrubberDelegate, NSScrubb
     }
 
     func scrubber(_ s: NSScrubber, layout: NSScrubberFlowLayout, sizeForItemAt i: Int) -> NSSize {
+        if items[i].image != nil {
+            let w = (items[i].title as NSString).size(withAttributes: [.font: PickerImageItem.font]).width
+            return NSSize(width: min(300, ceil(w) + 56), height: 30)
+        }
         let w = (items[i].title as NSString).size(withAttributes: [.font: font]).width
         if items[i].title == "|" { return NSSize(width: 14, height: 30) }
         return NSSize(width: min(260, ceil(w) + 30), height: 30)
@@ -1405,6 +1441,7 @@ final class BarView: NSView {
     var volBtn: PillButton!
     var castBtn: PillButton!
     var speedBtn: PillButton!
+    var onAskWhichPlayer: (() -> Bool)?
     var escBtn: PillButton!
     lazy var artLead = artButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8)   // moves right for Esc
     var speedFor = "", speedBundle = ""       // the item (and app) the speed button was last set up for
@@ -2857,6 +2894,7 @@ final class BarView: NSView {
     @objc func playPause() {
         bumpMediaTimer()
         if let l = Optional(position) { localSeek = (l, Date().timeIntervalSince1970) }
+        if onAskWhichPlayer?() ?? false { return }       // several paused players: the bar asks which one
         if currentTitle.isEmpty {
             if !transport(.toggle) { openPicker() }      // default app = "ask"
             return
@@ -3089,6 +3127,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     let view = BarView(frame: NSRect(origin: .zero, size: barSize))
     var wallpaperKey = ""
     var lastState = Data()
+    var rawState: [String: Any] = [:]       // the system's Now Playing item as lyricsd reports it, ignored or not
     var lastArtMtime: Date?
     var lastTitle = ""
     var artBG = false              // background is currently showing album art
@@ -3227,6 +3266,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         tray.view = ControlStripButton(coloredSymbol("music.note", 15, .white), self, #selector(showOnBar))
         view.onRegularBar = { [weak self] in self?.setBarHidden(true) }
         view.onRecheckState = { [weak self] in self?.lastState = Data() }
+        view.onAskWhichPlayer = { [weak self] in self.map { $0.view.askWhichPlayer(raw: $0.rawState) } ?? false }
         view.peekNext = { [weak self] done in self?.fetchNext(done) ?? done(nil) }
         addSystemTrayItem(tray)
         dfrSetControlStripPresence(trayId.rawValue, true)
@@ -3366,6 +3406,17 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    return
                                }
                                if c == "esc" { self.view.pressEsc(); return }      // presses the Esc button
+                               if c.hasPrefix("which") {                  // "which": what ▶ would ask about; "which seed": count the Now Playing app as recently heard; "which press": press ▶
+                                   if c.contains("seed") {
+                                       RecentPlayers.seen[self.rawState["bundle"] as? String ?? ""] =
+                                           .init(title: self.rawState["title"] as? String ?? "", at: Date(), heard: true)
+                                   }
+                                   if c.contains("press") { self.view.playPause() }
+                                   let items = self.view.playCandidates(raw: self.rawState)
+                                   try? "candidates: \(items.count) (\(items.map { $0.image == nil ? "no picture" : "picture" }.joined(separator: ", "))) asking=\(self.view.pickerMode)"
+                                       .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                   return
+                               }
                                if c == "esc on" || c == "esc off" { ConfigStore.shared.c.showEsc = c == "esc on"; return }
                                if c.hasPrefix("speed") {                  // "speed": the button's state; "speed step" presses it; "speed only on|off"
                                    if c.contains("step") { self.view.stepSpeed() }
@@ -3589,6 +3640,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         if let d = FileManager.default.contents(atPath: home + "/state.json"), d != lastState,
            let raw = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
             lastState = d
+            rawState = raw
             npIgnored = NowPlayingFilter.ignored(raw)
             let j: [String: Any] = npIgnored ? [:] : raw         // a stale paused app: as if nothing were playing
             view.setPlaying(j["playing"] as? Bool ?? false)
@@ -3611,6 +3663,13 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                sp.isPlaying, Date().timeIntervalSince(sp.startedAt) > 3 {
                 sp.pause()   // another player took over
             }
+        }
+        if rawState["playing"] as? Bool ?? false {
+            RecentPlayers.note(bundle: rawState["bundle"] as? String ?? "", title: rawState["title"] as? String ?? "")
+        }
+        let own = StreamPlayer.shared
+        if own.isPlaying, own.tracks.indices.contains(own.index) {
+            RecentPlayers.note(bundle: Bundle.main.bundleIdentifier ?? "", title: own.tracks[own.index].title)
         }
         useOwnPlayerFallback()
         view.refreshSpeed()

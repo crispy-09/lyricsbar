@@ -65,6 +65,7 @@ struct GeneralPane: View {
             Section("Playback") {
                 Toggle("Shuffle Subsonic playlists by default", isOn: $store.c.defaultShuffle)
                 Toggle("Pause other players when starting a playlist", isOn: $store.c.pauseOthers)
+                Toggle("Ask which player to resume when several are paused", isOn: $store.c.askWhichPlayer)
                 Toggle("Resume the LyricsBar queue after a restart (paused)", isOn: $store.c.resumeQueue)
                 LabeledSlider(title: "Crossfade", value: $store.c.crossfadeSeconds, range: 0...12, step: 0.5,
                               format: { $0 == 0 ? "Off" : String(format: "%.1fs", $0) })

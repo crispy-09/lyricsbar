@@ -46,6 +46,7 @@ struct Config: Codable, Equatable {
     // Playback
     var showSubsonic = true
     var showSpotify = true
+    var askWhichPlayer = true         // ▶ with several recently used players paused: ask which one
     var showEsc = false               // an Esc key at the far left, for Macs whose Touch Bar replaced it
     var speedPodcastsOnly = true      // the Speed button only shows while a podcast plays
     var podcastSpeed = 1.0            // built-in player: the speed podcasts were last played at
