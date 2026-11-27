@@ -94,6 +94,7 @@ struct GeneralPane: View {
                 LabeledSlider(title: "Brightness / volume slider", value: $store.c.panelAutoHide, range: 2...20, step: 1, format: secs)
             }
             Section("App") {
+                Toggle("Esc key", isOn: $store.c.showEsc)
                 Toggle("Show menu bar icon", isOn: $store.c.showMenuBarIcon)
                 LabeledContent("Lyrics service") {
                     Button("Restart") { run("/bin/launchctl", ["kickstart", "-k", "gui/\(getuid())/com.crispy.touchbar-lyrics"]) }
@@ -233,7 +234,6 @@ struct AppearancePane: View {
                     Text("Minimal").tag("minimal"); Text("Pill").tag("pill")
                 }
                 .pickerStyle(.segmented)
-                Toggle("Esc key at the left end of the bar", isOn: $store.c.showEsc)
                 StripLayoutEditor()
                 Toggle("Show Playback speed only for podcasts", isOn: $store.c.speedPodcastsOnly)
                 Text("The top of the list is the right end of the bar. Buttons \u{201C}Behind ‹\u{201D} appear when you tap ‹: outward opens them to its left without moving the others; in place keeps the list order. With the expander off they're hidden. The regular Touch Bar keeps a ♪ in its Control Strip: tap it to bring LyricsBar back (the menu bar icon can switch too). The style also applies to the playlist picker and Up Next.")
