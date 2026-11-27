@@ -4,6 +4,22 @@
 
 Synced lyrics, album art and media controls on the MacBook Pro Touch Bar, plus a built-in Subsonic / Navidrome player with a library window.
 
+| | |
+| --- | --- |
+| Lyrics, in time with the song | ![A lyric line on the Touch Bar](docs/screenshots/bar-lyrics.png) |
+| Media controls | ![Scrubber, skip, like and queue buttons](docs/screenshots/bar-controls.png) |
+| Up Next | ![The queue on the Touch Bar](docs/screenshots/bar-up-next.png) |
+| Playlist picker | ![Providers and pinned playlists](docs/screenshots/bar-picker.png) |
+| More buttons behind ‹ | ![The extra buttons opened](docs/screenshots/bar-more-buttons.png) |
+| What's next, as a song ends | ![The next song announced](docs/screenshots/bar-next-song.png) |
+
+<p align="center">
+<img src="docs/screenshots/library-lyrics.png" width="49%" alt="Library window: lyrics">
+<img src="docs/screenshots/library-albums.png" width="49%" alt="Library window: albums">
+<img src="docs/screenshots/library-up-next.png" width="49%" alt="Library window: Up Next">
+<img src="docs/screenshots/settings-appearance.png" width="49%" alt="Settings: Appearance">
+</p>
+
 LyricsBar takes over the Touch Bar's control strip area with:
 
 - **Live, line-synced lyrics** for whatever is playing (Spotify, Apple Music, browsers, LyricsBar's own player, any app that reports Now Playing to macOS). Lyrics come from [LRCLIB](https://lrclib.net).
