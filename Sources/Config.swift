@@ -46,6 +46,9 @@ struct Config: Codable, Equatable {
     // Playback
     var showSubsonic = true
     var showSpotify = true
+    var speedPodcastsOnly = true      // the Speed button only shows while a podcast plays
+    var podcastSpeed = 1.0            // built-in player: the speed podcasts were last played at
+    var videoCaptions = false         // captions of the YouTube video playing in a browser, shown like lyrics (needs yt-dlp)
     var defaultShuffle = false
     var pauseOthers = true
     var crossfadeSeconds = 4.0        // built-in Subsonic player only; 0 = off
@@ -187,23 +190,25 @@ struct StripSlot: Codable, Equatable, Identifiable {
 
     static let names: [String: String] = ["brightness": "Brightness", "volume": "Volume", "library": "Library",
                                           "keyboard": "Keyboard brightness", "siri": "Siri", "screenshot": "Screenshot",
-                                          "regular": "Switch to the regular Touch Bar", "cast": "Cast (Spotify Connect)"]
+                                          "regular": "Switch to the regular Touch Bar", "cast": "Cast (Spotify Connect)",
+                                          "speed": "Playback speed"]
     static let icons: [String: String] = ["brightness": "sun.max.fill", "volume": "speaker.wave.2.fill",
                                           "library": "books.vertical.fill", "keyboard": "light.max", "siri": "siri",
                                           "screenshot": "camera.viewfinder", "regular": "rectangle.badge.xmark",
-                                          "cast": "airplayaudio"]
-    static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular", "cast"]
+                                          "cast": "airplayaudio", "speed": "gauge.with.dots.needle.67percent"]
+    static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular", "cast", "speed"]
     static let defaults: [StripSlot] = order.map {
-        StripSlot(id: $0, place: ["brightness", "volume", "library"].contains($0) ? "bar" : "off")
+        StripSlot(id: $0, place: ["brightness", "volume", "library", "speed"].contains($0) ? "bar" : "off")
     }
 
-    /// Known buttons only, each once, missing ones appended (off).
+    /// Known buttons only, each once; missing ones are added at their default place.
     static func normalized(_ l: [StripSlot]) -> [StripSlot] {
         var seen = Set<String>(), out: [StripSlot] = []
         for s in l where names[s.id] != nil && !seen.contains(s.id) && ["bar", "more", "off"].contains(s.place) {
             seen.insert(s.id); out.append(s)
         }
-        for id in order where !seen.contains(id) { out.append(StripSlot(id: id, place: "off")) }
+        // a button added in a newer version comes in at its default place, on the left
+        for s in defaults where !seen.contains(s.id) { out.insert(s, at: 0) }
         return out
     }
 }

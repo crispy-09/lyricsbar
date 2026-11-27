@@ -77,8 +77,84 @@ def parse_lrc(text):
             lines.append((int(m) * 60 + float(s), words))
     return sorted(lines)
 
+# Captions of a YouTube video playing in a browser. The browser only reports title, channel and length, so the
+# video is found by searching for those (yt-dlp), and only a result with the same title and length is used.
+BROWSERS = ("com.apple.safari", "com.apple.webkit", "com.google.chrome", "org.chromium", "org.mozilla", "company.thebrowser",
+            "com.microsoft.edgemac", "com.brave.browser", "com.operasoftware", "com.vivaldi", "app.zen-browser",
+            "com.kagi.kagimacos", "org.torproject", "net.imput.helium", "ai.perplexity.comet", "com.openai.atlas")
+
+def _is_browser(bundle):
+    return bundle.lower().startswith(BROWSERS)
+
+def _ytdlp(args, timeout=45):
+    exe = shutil.which("yt-dlp") or next((x for x in ("/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp") if os.path.exists(x)), None)
+    if not exe:
+        return None
+    env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "/usr/bin:/bin"))
+    r = subprocess.run([exe, "--no-warnings", "--no-playlist", "-J"] + args, capture_output=True, text=True, timeout=timeout, env=env)
+    return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
+
+def _caption_lines(events):
+    """json3 caption events → [(seconds, text)]. A caption stays up until the next one; after a real gap
+    (nobody speaks) the line is cleared. Automatic captions overlap each other, so they never clear."""
+    caps = []
+    for e in events:
+        text = re.sub(r"\s+", " ", "".join(x.get("utf8", "") for x in e.get("segs") or [])).strip()
+        if text and not (caps and caps[-1][2] == text):
+            t = (e.get("tStartMs") or 0) / 1000.0
+            caps.append((t, t + (e.get("dDurationMs") or 0) / 1000.0, text))
+    lines = []
+    for i, (t, end, text) in enumerate(caps):
+        lines.append((t, text))
+        if end > t and (i + 1 == len(caps) or caps[i + 1][0] - end > 1.5):
+            lines.append((end, ""))
+    return lines
+
+_yt = {"wait_until": 0.0}
+
+def captions_for(p):
+    """[(seconds, text)] for the video, [] if it has none or isn't found, None if that couldn't be asked."""
+    dur = p.get("duration") or 0
+    if not p.get("track"):
+        return []
+    if dur <= 0 or time.time() < _yt["wait_until"]:
+        return None                              # no length yet (so no telling which video it is), or YouTube said no: later
+    try:
+        found = _ytdlp(["--flat-playlist", "ytsearch5:" + (p["track"] + " " + p.get("artist", "")).strip()])
+        if found is None:
+            return None if shutil.which("yt-dlp") or os.path.exists("/opt/homebrew/bin/yt-dlp") else []
+        norm = lambda s: re.sub(r"\W+", "", (s or "").lower())
+        vid = next((e["id"] for e in found.get("entries") or []
+                    if e.get("id") and norm(e.get("title")) == norm(p["track"]) and abs((e.get("duration") or 0) - dur) <= 2), None)
+        if not vid:
+            return []
+        info = _ytdlp(["--skip-download", "--ignore-no-formats-error", "https://www.youtube.com/watch?v=" + vid])
+        if info is None:
+            # usually YouTube asking to "confirm you're not a bot" after many lookups: leave it alone for a while
+            _yt["wait_until"] = time.time() + 900
+            note("YouTube refused the captions lookup; trying again in 15 minutes")
+            return None
+        manual, auto = info.get("subtitles") or {}, info.get("automatic_captions") or {}
+        manual = {k: v for k, v in manual.items() if k != "live_chat"}
+        lang = (info.get("language") or "en").split("-")[0]
+        # captions someone wrote, in the video's language; else the automatic ones in the language spoken
+        pick = next((manual[k] for k in manual if k.split("-")[0] == lang), None) \
+            or auto.get(lang + "-orig") or next((auto[k] for k in auto if k.endswith("-orig")), None) \
+            or auto.get(lang) or next(iter(manual.values()), None)
+        url = next((f.get("url") for f in pick or [] if f.get("ext") == "json3"), None)
+        if not url:
+            return []
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return _caption_lines(json.loads(r.read()).get("events") or [])
+    except (subprocess.TimeoutExpired, OSError, ValueError, KeyError, TypeError) as e:
+        note(f"captions lookup failed: {type(e).__name__}")
+        return None
+
 def lyrics_for(p):
-    key = hashlib.md5(f"{p['artist']}|{p['track']}".lower().encode()).hexdigest()
+    captions = _is_browser(p.get("bundle", "")) and bool(setting("videoCaptions", False))
+    # videos are remembered apart from songs: "no lyrics" for a title mustn't hide its captions
+    key = hashlib.md5((("video|" if captions else "") + f"{p['artist']}|{p['track']}").lower().encode()).hexdigest()
     path = os.path.join(CACHE, key + ".json")
     try:
         with open(path) as f:
@@ -111,6 +187,11 @@ def lyrics_for(p):
         except Exception:
             return None  # network error: don't cache, retry next song change
     lines = parse_lrc(synced)
+    if not lines and captions:
+        caps = captions_for(p)
+        if caps is None:
+            return None                          # couldn't ask: try again later, remember nothing
+        lines = caps
     if dur > 0:                                  # without the length the match is a guess: don't remember it
         tmp = f"{path}.{os.getpid()}.tmp"
         with open(tmp, "w") as f:

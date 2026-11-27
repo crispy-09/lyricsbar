@@ -43,6 +43,7 @@ Notes for coding agents (and humans) working on LyricsBar.
 - `scripts/lyricsd.py`: the lyrics daemon.
   - It runs `media-control stream`, then writes `state.json`, `artwork.jpg` and `current.txt` (the current lyric line).
   - It runs `media-control stream --micros` for exact timestamps (the plain ones are whole seconds, so events had to be anchored at arrival, which runs late). It falls back to plain timestamps if that media-control produces nothing with `--micros`.
+  - Captions: when LRCLIB has nothing for a browser item and `videoCaptions` is on, `captions_for` searches YouTube with yt-dlp (`ytsearch5:` title + channel, flat), takes the result with the same title (ignoring punctuation) and length (±2 s), reads that video's caption list (`-J`) and fetches one json3 track itself. Video results are cached under a separate key (`video|…`). No length yet means "ask again later" (None), not "none".
   - The Now Playing feed often doesn't announce seeks, so the app writes `seek.json` (`noteSeek`) on every seek and lyricsd resets its clock from it. For 1.5 s lyricsd ignores Now Playing updates that disagree with the hint by more than 2 s (they were sent before the seek).
   - While LyricsBar (this bundle id) is the Now Playing app, lyricsd takes the song and timing from `clock.json` (title, artist, album, duration, position, time, rate), which `StreamPlayer.updateInfo()` writes on every change, instead of the feed, which arrives late. A playing clock older than 20 s is ignored (the app quit or hung).
   - It caches LRC in `cache/<md5(artist|title)>.json` (written atomically; a damaged file is refetched; "no lyrics" expires after a week; a match made without knowing the song's length isn't cached).
@@ -131,6 +132,13 @@ Screenshots:
 - Files in `~/.touchbar-lyrics` must not contain secrets. The directory is mode 700.
 - Build AppleScript and Spotify URIs only from sanitised IDs (`spotifySafe()`), never from raw names.
 - Never commit anything from `~/.touchbar-lyrics`: config, queue, state, cache, logs, or signing keys.
+
+## Playback speed (`Sources/Speed.swift`)
+
+- The `speed` strip slot is hidden unless `BarView.speedButtonWanted` (something is playing, and it is a podcast or `speedPodcastsOnly` is off). `refreshSpeed()` runs on every tick; a change of visibility calls `applyConfig()`.
+- Own player: `StreamPlayer.speed` sets `defaultRate` on both players, so every `play()` uses it, and `rate` on the ones already running. `clock.json` and Now Playing carry the real rate. `trackChanged()` applies `podcastSpeed` to podcasts (`StreamTrack.podcast`, from the Subsonic song's `type`/`genre`).
+- Other apps: `media-control speed X`; the label shows the rate the app reports (`state.json` `rate`), so an app that ignores the command stays at 1× and gets a toast. Podcast detection: `PlaybackSpeed.detect` (Spotify item link `spotify:episode:`, Music genre/media kind, a list of podcast-only apps).
+- Debug hook: `speed` writes the state; `speed step` presses the button.
 
 ## Cast and audio output (`Sources/AirPlay.swift`)
 

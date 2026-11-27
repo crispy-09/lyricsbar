@@ -72,6 +72,7 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 | Tap 📚 | Open / close the Library window |
 | Optional buttons (Settings → Appearance → Buttons) | Keyboard brightness (tap for a slider, or slide across it), Siri, Screenshot (the ⇧⌘5 toolbar), and **regular Touch Bar**. They sit behind a ‹ button on the right; tap it to show them (they fold away again after a few seconds) |
 | Regular Touch Bar button, or the menu bar icon's "Use the Regular Touch Bar" | Gives the Touch Bar back to macOS. A ♪ stays in the Control Strip: tap it (or use the menu bar icon) to bring LyricsBar back. It stays off across restarts until you do. The ♪ needs no setup, but only shows when the Touch Bar is set to show the Control Strip (System Settings → Keyboard → Touch Bar Settings) |
+| Tap the speed button (1×) | Step the playback speed: 1×, 1.25×, 1.5×, 1.75×, 2×, then back to 1×. By default it only appears while a podcast plays (see below) |
 | Hold a playlist in the picker | Queue it next instead of playing it. For Spotify this works on playlists you made (up to 100 songs); Spotify doesn't let personal apps read playlists you only follow |
 | In Up Next, hold and drag a song | Reorder it, or drop it on the trash to remove it |
 | In Up Next, swipe right at the start of the list | Reveal **Clear**; tap it to empty Up Next |
@@ -82,6 +83,15 @@ Everything else is in **Settings** (Library window sidebar, or ⌘,):
 - **Appearance**: background (how long the album art stays after pausing), lyrics, what the bar shows while playing (lyrics, media controls, or title and artist) and while paused (lyrics, media controls, title and artist, rotating quotes, or your own phrase), visualizer, buttons. With a rotating wallpaper the background is black, because macOS doesn't report which picture is showing
 - **Providers**: the default player (what ▶ starts when nothing is loaded; the first service you connect, until you pick one), the providers shown in the picker, scrobbling, accounts
 - **Discord**: Rich Presence
+
+**Playback speed.** The speed button sits with the other buttons (Settings → Appearance → Buttons: on the bar, behind ‹, or off). "Show Playback speed only for podcasts" (on by default) keeps it hidden until a podcast plays; turn that off to always have it.
+
+- What counts as a podcast: a Spotify episode, anything in Apple Podcasts (and a few other podcast apps), a track in Music whose genre or kind says podcast, and songs your Subsonic server files under the type or genre "Podcast".
+- The built-in player changes speed itself (pitch is kept) and remembers the speed for podcasts; music goes back to 1× while the button is podcasts-only.
+- For other apps LyricsBar sends the system's "change playback rate" command. Apps that don't take it stay at 1×, and the bar says so. Not tested yet with Spotify episodes or Apple Podcasts.
+- Crossfade isn't adjusted for speed, so at 2× the outgoing song ends before the fade is over.
+
+**Captions for YouTube videos** (off by default; General → Lyrics). When a browser plays a YouTube video, its captions are shown like lyrics. The browser only reports the title, channel and length, so LyricsBar searches YouTube for those with [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) (`brew install yt-dlp`) and only uses a result whose title and length match. Captions written for the video are preferred, else the automatic ones. Limits: YouTube only; whatever a browser plays is searched for on YouTube while this is on (a film on another site included, though it won't match); the lookup takes a few seconds; after many lookups YouTube can refuse them for a while (LyricsBar then waits 15 minutes before asking again); live streams and videos the browser reports no length for get none; a seek inside the video is only followed if the browser announces it.
 
 Playlists are managed in the Library's **Playlists** section. Pinned playlists are listed at the top; drag to reorder, or unpin. Use + for a new playlist, right-click a playlist to pin, rename, delete or edit its songs, or use **Edit** on a playlist's page.
 
@@ -148,7 +158,7 @@ Album art is optional. Subsonic cover links contain your login and are never sen
 - Subsonic request URLs include an auth token, so LyricsBar's HTTP cache is **memory-only**.
 - `~/.touchbar-lyrics/` holds settings, the saved queue, cached lyrics and the scrobble queue (song names only), and is readable only by you.
 - The visualizer reads LyricsBar's own player directly. For other apps it taps only that app's audio, and only while music plays and the visualizer is on. Audio is analysed for levels and never stored.
-- Network requests go only to your Subsonic server and `lrclib.net`, plus Spotify / Last.fm / ListenBrainz if you connect them and Apple's iTunes Search if you turn on Discord album art.
+- Network requests go only to your Subsonic server and `lrclib.net`, plus Spotify / Last.fm / ListenBrainz if you connect them, Apple's iTunes Search if you turn on Discord album art, and YouTube (through yt-dlp) if you turn on captions for videos.
 - Discord presence goes over the local Discord socket only, and only while it's switched on.
 
 ## Stable and Beta

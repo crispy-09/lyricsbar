@@ -19,6 +19,7 @@ struct SSong: Identifiable, Hashable {
     let album: String
     let duration: Int
     let coverArt: String?
+    var podcast = false           // the server files it as a podcast (type or genre)
     static func == (a: SSong, b: SSong) -> Bool { a.uid == b.uid }
     func hash(into h: inout Hasher) { h.combine(uid) }
 }
@@ -138,7 +139,8 @@ enum Subsonic {
     static func song(_ e: [String: Any]) -> SSong {
         SSong(id: e["id"] as? String ?? "", title: txt(e["title"]),
               artist: txt(e["artist"]), album: txt(e["album"]),
-              duration: (e["duration"] as? NSNumber)?.intValue ?? 0, coverArt: e["coverArt"] as? String)
+              duration: (e["duration"] as? NSNumber)?.intValue ?? 0, coverArt: e["coverArt"] as? String,
+              podcast: (e["type"] as? String)?.lowercased() == "podcast" || txt(e["genre"]).lowercased().contains("podcast"))
     }
 
     static func playlistInfo(_ p: [String: Any]) -> SPlaylist {

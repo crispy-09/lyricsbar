@@ -436,6 +436,7 @@ struct StreamTrack {
     let stream: URL
     let cover: URL?
     var coverId: String? = nil
+    var podcast = false
 }
 
 final class StreamPlayer: NSObject, ObservableObject {
@@ -444,6 +445,17 @@ final class StreamPlayer: NSObject, ObservableObject {
     private let pa = AVPlayer(), pb = AVPlayer()
     private var cur: AVPlayer
     private var other: AVPlayer { cur === pa ? pb : pa }
+    /// Playback speed of the built-in player (pitch is kept). Every play() starts at it.
+    var speed: Double = 1 {
+        didSet {
+            for p in [pa, pb] {
+                p.defaultRate = Float(speed)
+                if p.rate != 0 { p.rate = Float(speed) }       // playing or about to: change it now
+            }
+            updateInfo()
+        }
+    }
+    var currentIsPodcast: Bool { tracks.indices.contains(index) && tracks[index].podcast }
     var player: AVPlayer { cur }
     var tracks: [StreamTrack] = []
     var index = 0
@@ -716,6 +728,9 @@ final class StreamPlayer: NSObject, ObservableObject {
 
     private func trackChanged() {
         resumeAt = 0
+        // a podcast picks up the speed it was last played at; with the button set to podcasts only, music is back at 1×
+        let want = currentIsPodcast ? cfg.podcastSpeed : (cfg.speedPodcastsOnly ? 1 : speed)
+        if want != speed { speed = want }
         objectWillChange.send()
         DispatchQueue.main.async { self.save() }
         let t = tracks[index]
@@ -973,7 +988,7 @@ final class StreamPlayer: NSObject, ObservableObject {
         let obj: [String: Any] = [
             "index": index, "position": pos.isFinite ? pos : 0, "shuffled": shuffled,
             "tracks": tracks.map { ["id": $0.id, "title": $0.title, "artist": $0.artist, "album": $0.album,
-                                    "duration": $0.duration, "coverId": $0.coverId ?? ""] },
+                                    "duration": $0.duration, "coverId": $0.coverId ?? "", "podcast": $0.podcast] },
         ]
         if let d = try? JSONSerialization.data(withJSONObject: obj) {
             try? d.write(to: URL(fileURLWithPath: StreamPlayer.queuePath), options: .atomic)
@@ -996,7 +1011,7 @@ final class StreamPlayer: NSObject, ObservableObject {
             let c = (e["coverId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             return StreamTrack(id: id, title: e["title"] as? String ?? "", artist: e["artist"] as? String ?? "",
                                album: e["album"] as? String ?? "", duration: (e["duration"] as? NSNumber)?.doubleValue ?? 0,
-                               stream: u, cover: Subsonic.coverURL(c), coverId: c)
+                               stream: u, cover: Subsonic.coverURL(c), coverId: c, podcast: e["podcast"] as? Bool ?? false)
         }
         guard !t.isEmpty else { return }
         tracks = t
@@ -1046,7 +1061,7 @@ final class StreamPlayer: NSObject, ObservableObject {
         let t = tracks[index], pos = cur.currentTime().seconds
         let clock: [String: Any] = ["bundle": Bundle.main.bundleIdentifier ?? "", "title": t.title, "artist": t.artist,
                                     "album": t.album, "duration": t.duration, "position": pos.isFinite ? pos : 0,
-                                    "at": Date().timeIntervalSince1970, "rate": cur.timeControlStatus == .playing ? 1.0 : 0.0]
+                                    "at": Date().timeIntervalSince1970, "rate": cur.timeControlStatus == .playing ? Double(cur.rate) : 0.0]
         if let d = try? JSONSerialization.data(withJSONObject: clock) {
             try? d.write(to: URL(fileURLWithPath: home + "/clock.json"), options: .atomic)
         }
@@ -1061,7 +1076,7 @@ final class StreamPlayer: NSObject, ObservableObject {
             MPMediaItemPropertyAlbumTitle: t.album, MPMediaItemPropertyPlaybackDuration: t.duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: pos.isFinite ? pos : 0,
             // 0 while (re)buffering after a seek or skip, so lyrics don't run ahead of the audio
-            MPNowPlayingInfoPropertyPlaybackRate: cur.timeControlStatus == .playing ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyPlaybackRate: cur.timeControlStatus == .playing ? Double(cur.rate) : 0.0,
         ]
         if let a = artwork { info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: a.size) { _ in a } }
         writeClock()
@@ -1095,7 +1110,8 @@ func streamTracks(_ songs: [SSong]) -> [StreamTrack] {
     songs.compactMap { s in
         guard let u = Subsonic.streamURL(s.id) else { return nil }
         return StreamTrack(id: s.id, title: s.title, artist: s.artist, album: s.album,
-                           duration: Double(s.duration), stream: u, cover: Subsonic.coverURL(s.coverArt), coverId: s.coverArt)
+                           duration: Double(s.duration), stream: u, cover: Subsonic.coverURL(s.coverArt), coverId: s.coverArt,
+                           podcast: s.podcast)
     }
 }
 
@@ -1375,6 +1391,10 @@ final class BarView: NSView {
     var panel: Capsule!
     var volBtn: PillButton!
     var castBtn: PillButton!
+    var speedBtn: PillButton!
+    var speedFor = "", speedBundle = ""       // the item (and app) the speed button was last set up for
+    var speedPodcast = false, speedShown = false
+    var speedSeen = 1.0, speedAskedUntil = Date.distantPast
     var panelIcon: PillButton!
     let panelSlider = ScrubBar()
 
@@ -1410,7 +1430,8 @@ final class BarView: NSView {
     var onRegularBar: (() -> Void)?
     var onRecheckState: (() -> Void)?        // read the real play state again (after an optimistic change)
     var anyStripButton: Bool {
-        StripSlot.normalized(cfg.stripLayout).contains { $0.place != "off" && ($0.id != "keyboard" || KeyboardLight.available) }
+        StripSlot.normalized(cfg.stripLayout).contains {
+            $0.place != "off" && ($0.id != "keyboard" || KeyboardLight.available) && ($0.id != "speed" || speedButtonWanted) }
     }
     var upNextReturnsToMedia = false
     let vizBG = VisualizerView(style: .background)
@@ -1579,8 +1600,10 @@ final class BarView: NSView {
         shotBtn = PillButton(symbol("camera.viewfinder", 14), self, #selector(openScreenshot), width: 52)
         regularBtn = PillButton(symbol("rectangle.badge.xmark", 14), self, #selector(regularBar), width: 52)
         castBtn = PillButton(symbol("airplayaudio", 14), self, #selector(openCast), width: 52)
+        speedBtn = PillButton(nil, self, #selector(stepSpeed), width: 52)
+        speedBtn.imagePosition = .noImage
         moreBtn = PillButton(symbol("chevron.left", 13, .bold), self, #selector(toggleStripExpanded), width: 34)
-        strip = Capsule([moreBtn, castBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
+        strip = Capsule([moreBtn, speedBtn, castBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
         for (btn, panel) in [(briBtn!, Panel.brightness), (volBtn!, .volume), (kbdBtn!, .keyboard)] {
             let o = SlideOverlay()
             fill(o, in: btn)
@@ -2884,12 +2907,12 @@ final class BarView: NSView {
     /// Extras show only while expanded (‹ / ›); they fold away again after a few seconds.
     var stripButtons: [String: NSView] {
         ["brightness": briBtn, "volume": volBtn, "library": appsBtn, "keyboard": kbdBtn, "siri": siriBtn,
-         "screenshot": shotBtn, "regular": regularBtn, "cast": castBtn]
+         "screenshot": shotBtn, "regular": regularBtn, "cast": castBtn, "speed": speedBtn]
     }
     /// Lays the buttons out in the user's order; "Behind ‹" ones only show while expanded.
     func applyStripButtons() {
         let layout = StripSlot.normalized(cfg.stripLayout)
-        let usable = { (s: StripSlot) in s.id != "keyboard" || KeyboardLight.available }
+        let usable = { (s: StripSlot) in (s.id != "keyboard" || KeyboardLight.available) && (s.id != "speed" || self.speedButtonWanted) }
         let extras = cfg.stripExpand != "off" && layout.contains { $0.place == "more" && usable($0) }
         if !extras && stripExpanded { setStripExpanded(false, restore: true) }
         let views: [NSView]
@@ -3254,6 +3277,16 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    }
                                    return
                                }
+                               if c.hasPrefix("speed") {                  // "speed": the button's state; "speed step" presses it; "speed only on|off"
+                                   if c.contains("step") { self.view.stepSpeed() }
+                                   if c.contains("only") { ConfigStore.shared.c.speedPodcastsOnly = !c.contains("off") }
+                                   DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                                       let v = self.view
+                                       try? "own=\(v.speedIsOwn) podcast=\(v.speedPodcast) wanted=\(v.speedButtonWanted) hidden=\(v.speedBtn.isHidden) label=\(v.speedBtn.title) speed=\(v.currentSpeed) playerRate=\(StreamPlayer.shared.player.rate) podcastsOnly=\(cfg.speedPodcastsOnly)"
+                                           .write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
+                                   }
+                                   return
+                               }
                                if c.hasPrefix("cast") {                   // opens the Cast list; writes what it shows after 4 s
                                    if c.contains("ax") {                  // "cast ax": is the Accessibility permission there?
                                        try? "accessibility: \(ControlCenterSound.trusted)".write(toFile: home + "/debug.out", atomically: true, encoding: .utf8)
@@ -3489,6 +3522,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             }
         }
         useOwnPlayerFallback()
+        view.refreshSpeed()
         if !npIgnored, let s = try? String(contentsOfFile: home + "/current.txt", encoding: .utf8) {
             let line = s.trimmingCharacters(in: .whitespacesAndNewlines)
             // no lyrics: lyricsd writes "♪ Title — Artist"; keep the title display instead
