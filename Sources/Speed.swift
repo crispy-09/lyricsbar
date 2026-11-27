@@ -45,6 +45,71 @@ enum PlaybackSpeed {
     }
 }
 
+/// Spotify takes no speed command from outside (not the system's, not AppleScript, not its Web API), so its own
+/// speed menu is used through Accessibility: the "Speed 1×" button next to the transport, then the menu item.
+/// Works with the window in the background, but the window has to exist. Needs the Accessibility permission.
+enum SpotifySpeed {
+    static let steps: [Double] = [1, 1.2, 1.5, 1.8, 2]          // Spotify's menu goes in tenths
+    private static let q = DispatchQueue(label: "lyricsbar.spotifyspeed")
+
+    private static func attr(_ e: AXUIElement, _ a: String) -> Any? {
+        var v: CFTypeRef?
+        return AXUIElementCopyAttributeValue(e, a as CFString, &v) == .success ? v : nil
+    }
+    /// The speed an element is labelled with ("Speed 1.5×", in any language: the number before the ×).
+    private static func speed(of e: AXUIElement) -> Double? {
+        for a in ["AXTitle", "AXDescription"] {
+            guard let s = attr(e, a) as? String, s.hasSuffix("×"),
+                  let r = s.range(of: #"\d+([.,]\d+)?(?=\s?×$)"#, options: .regularExpression) else { continue }
+            return Double(s[r].replacingOccurrences(of: ",", with: "."))
+        }
+        return nil
+    }
+    private static func find(_ e: AXUIElement, role: String, depth: Int = 0, _ ok: (Double) -> Bool) -> AXUIElement? {
+        if depth > 60 { return nil }
+        if attr(e, "AXRole") as? String == role, let v = speed(of: e), ok(v) { return e }
+        for c in (attr(e, "AXChildren") as? [AXUIElement]) ?? [] {
+            if let r = find(c, role: role, depth: depth + 1, ok) { return r }
+        }
+        return nil
+    }
+    private static func search(role: String, _ ok: (Double) -> Bool) -> AXUIElement? {
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: "com.spotify.client").first else { return nil }
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 2)
+        for w in (attr(ax, "AXWindows") as? [AXUIElement]) ?? [] {
+            if let r = find(w, role: role, ok) { return r }
+        }
+        return nil
+    }
+
+    /// The speed Spotify is set to; nil if it can't be read (no permission, no window, not a podcast).
+    static func read(_ done: @escaping (Double?) -> Void) {
+        guard AXIsProcessTrusted() else { done(nil); return }
+        q.async {
+            let v = search(role: "AXButton") { _ in true }.flatMap { speed(of: $0) }
+            DispatchQueue.main.async { done(v) }
+        }
+    }
+    static func set(_ v: Double, _ done: @escaping (Bool) -> Void) {
+        q.async {
+            var ok = false
+            if let button = search(role: "AXButton", { _ in true }),
+               AXUIElementPerformAction(button, kAXPressAction as CFString) == .success {
+                for _ in 0..<10 {                                  // the menu takes a moment to appear
+                    usleep(100_000)
+                    if let item = search(role: "AXMenuItem", { abs($0 - v) < 0.01 }) {
+                        ok = AXUIElementPerformAction(item, kAXPressAction as CFString) == .success
+                        break
+                    }
+                }
+                if !ok { AXUIElementPerformAction(button, kAXPressAction as CFString) }   // close the menu again
+            }
+            DispatchQueue.main.async { done(ok) }
+        }
+    }
+}
+
 extension BarView {
     /// What the speed applies to: the own player's song, or another app's item.
     private var speedKey: String {
@@ -55,10 +120,12 @@ extension BarView {
         return currentTitle.isEmpty ? "" : bundleId + "|" + currentTitle
     }
     var speedIsOwn: Bool { speedKey.hasPrefix("own|") }
+    var speedIsSpotify: Bool { !speedIsOwn && bundleId == "com.spotify.client" }
     var currentSpeed: Double {
         if speedIsOwn { return StreamPlayer.shared.speed }
         // what the app reports while it plays; while paused, the last speed seen or asked for
-        if isPlaying, elapsedAt.rate > 0, Date() >= speedAskedUntil { speedSeen = elapsedAt.rate }
+        // (Spotify always reports 1: its speed is read from its window instead)
+        if !speedIsSpotify, isPlaying, elapsedAt.rate > 0, Date() >= speedAskedUntil { speedSeen = elapsedAt.rate }
         return speedSeen
     }
     var speedButtonWanted: Bool { !speedKey.isEmpty && (!cfg.speedPodcastsOnly || speedPodcast) }
@@ -78,6 +145,12 @@ extension BarView {
                     PlaybackSpeed.detect(bundle: bundleId) { [weak self] yes in
                         guard let self, self.speedFor == key else { return }
                         self.speedPodcast = yes
+                        if yes, self.speedIsSpotify {
+                            SpotifySpeed.read { [weak self] v in
+                                guard let self, let v, self.speedFor == key, Date() >= self.speedAskedUntil else { return }
+                                self.speedSeen = v
+                            }
+                        }
                     }
                 }
             }
@@ -101,6 +174,22 @@ extension BarView {
             let sp = StreamPlayer.shared
             sp.speed = v
             if sp.currentIsPodcast { ConfigStore.shared.c.podcastSpeed = v }
+        } else if speedIsSpotify {
+            guard AXIsProcessTrusted() else {
+                ControlCenterSound.askPermission()
+                toast("Allow LyricsBar under Privacy & Security → Accessibility to change Spotify's speed", seconds: 4)
+                return
+            }
+            let from = speedSeen
+            let v = SpotifySpeed.steps.first { $0 > from + 0.01 } ?? SpotifySpeed.steps[0]
+            speedSeen = v                                        // shown right away; taken back if it didn't work
+            speedAskedUntil = Date().addingTimeInterval(3)
+            SpotifySpeed.set(v) { [weak self] ok in
+                guard let self, !ok else { return }
+                self.speedSeen = from
+                self.toast(self.speedPodcast ? "Couldn't reach Spotify's speed menu (its window has to be open)"
+                                             : "Spotify only changes speed for podcasts", seconds: 3)
+            }
         } else {
             run(mediaControl, ["speed", String(v)])
             speedSeen = v

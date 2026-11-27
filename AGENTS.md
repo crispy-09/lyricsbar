@@ -140,6 +140,7 @@ Screenshots:
 - The `speed` strip slot is hidden unless `BarView.speedButtonWanted` (something is playing, and it is a podcast or `speedPodcastsOnly` is off). `refreshSpeed()` runs on every tick; a change of visibility calls `applyConfig()`.
 - Own player: `StreamPlayer.speed` sets `defaultRate` on both players, so every `play()` uses it, and `rate` on the ones already running. `clock.json` and Now Playing carry the real rate. `trackChanged()` applies `podcastSpeed` to podcasts (`StreamTrack.podcast`, from the Subsonic song's `type`/`genre`).
 - Other apps: `media-control speed X`; the label shows the rate the app reports (`state.json` `rate`), so an app that ignores the command stays at 1× and gets a toast. Podcast detection: `PlaybackSpeed.detect` (Spotify item link `spotify:episode:`, Music genre/media kind, a list of podcast-only apps).
+- Spotify ignores the rate command (and reports rate 1 at any speed), so `SpotifySpeed` presses the "Speed 1×" button in Spotify's window through Accessibility and then the menu item with the wanted number (matched by the number before `×`, so any language). `BarView.position` multiplies by the speed for Spotify.
 - Debug hook: `speed` writes the state; `speed step` presses the button.
 
 ## Cast and audio output (`Sources/AirPlay.swift`)

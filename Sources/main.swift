@@ -2387,7 +2387,9 @@ final class BarView: NSView {
         if let l = localSeek, l.t > elapsedAt.t {
             return l.pos + (isPlaying ? now - l.t : 0)
         }
-        return elapsedAt.pos + (now - elapsedAt.t) * elapsedAt.rate
+        // Spotify reports rate 1 whatever speed a podcast plays at
+        let rate = elapsedAt.rate * (speedIsSpotify && elapsedAt.rate == 1 ? speedSeen : 1)
+        return elapsedAt.pos + (now - elapsedAt.t) * rate
     }
 
     func updateScrubber() {
