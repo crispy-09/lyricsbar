@@ -46,6 +46,7 @@ struct Config: Codable, Equatable {
     // Playback
     var showSubsonic = true
     var showSpotify = true
+    var musicOverBrowsers = true      // music (own player, Spotify, Music) stays on the bar when a browser plays something
     var askWhichPlayer = true         // ▶ with several recently used players paused: ask which one
     var showEsc = false               // an Esc key at the far left, for Macs whose Touch Bar replaced it
     var speedPodcastsOnly = true      // the Speed button only shows while a podcast plays

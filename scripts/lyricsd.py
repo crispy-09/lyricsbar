@@ -34,7 +34,7 @@ if application "Spotify" is running then
   tell application "Spotify"
     if player state is playing then
       set t to current track
-      set r to "playing" & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((duration of t) / 1000) & tab & (player position)
+      set r to "playing" & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & ((duration of t) / 1000) & tab & (player position) & tab & "com.spotify.client"
     end if
   end tell
 end if
@@ -42,7 +42,7 @@ if r is "" and application "Music" is running then
   tell application "Music"
     if player state is playing then
       set t to current track
-      set r to "playing" & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & (duration of t) & tab & (player position)
+      set r to "playing" & tab & (name of t) & tab & (artist of t) & tab & (album of t) & tab & (duration of t) & tab & (player position) & tab & "com.apple.Music"
     end if
   end tell
 end if
@@ -55,11 +55,12 @@ def player():
     except Exception:
         return None
     parts = out.split("\t")
-    if len(parts) != 6 or parts[0] != "playing":
+    if len(parts) != 7 or parts[0] != "playing":
         return None
     num = lambda s: float(s.replace(",", "."))
     try:
-        return dict(track=parts[1], artist=parts[2], album=parts[3], duration=num(parts[4]), position=num(parts[5]))
+        return dict(track=parts[1], artist=parts[2], album=parts[3], duration=num(parts[4]), position=num(parts[5]),
+                    bundle=parts[6])
     except ValueError:
         return None
 
@@ -311,10 +312,98 @@ def _keep_times(p, last):
     return dict(key=key, el=el, anchor=anchor, dur=dur,
                 rate=float(p.get("playbackRate") or 1) if p.get("playing") else 0.0)
 
+MUSIC_APPS = ("com.spotify.client", "com.apple.Music")       # can be asked directly whether they still play
+
 def _stream():
-    """Follow the system Now Playing feed (works for Spotify, Music, browsers, any player...)."""
-    last_key, last_art, timing = None, None, None
+    """Follow the system Now Playing feed (works for Spotify, Music, browsers, any player...).
+
+    Music comes before browsers: macOS hands Now Playing to whatever started last, so a video (or a silent
+    thumbnail preview) in a browser would push the song off the bar. While Spotify or Music is playing,
+    browser items are held back; the latest one is let through when the music stops. (LyricsBar's own player
+    is handled by the app, which knows its player directly, and by now_playing() below for the lyrics.)"""
+    s = dict(key=None, art=None, timing=None, shown=("", False), held=None)
+    gate = threading.Lock()                      # events are handled one at a time (the stream and the watcher below)
     micros = True                                # exact timestamps; dropped if this media-control can't do them
+
+    def hold(p):
+        """True if this browser item has to wait because music is playing."""
+        if not (p.get("title") and _is_browser(p.get("bundleIdentifier") or "") and setting("musicOverBrowsers", True)):
+            s["held"] = None
+            return False
+        bundle, playing = s["shown"]
+        # already holding: the watcher keeps checking; otherwise ask the app once
+        if playing and bundle in MUSIC_APPS and (s["held"] is not None or player() is not None):
+            s["held"] = p
+            return True
+        s["held"] = None
+        return False
+
+    def handle(p):
+        try:
+            s["timing"] = _keep_times(p, s["timing"])
+            s["art"] = _publish(p, s["art"])
+        except (ValueError, TypeError, OSError):
+            return                               # one odd event (or a failed write) must not restart the stream
+        s["shown"] = (p.get("bundleIdentifier") or "", bool(p.get("playing")))
+        if not p.get("title"):
+            with _lock: _np["state"] = None
+            s["key"] = None
+            return
+        paused = not p.get("playing")            # keep the song while paused so its lyric line stays up
+        # the rate matters too: buffering (0) → playing (1) at the same position must restart the clock
+        key = (p.get("title"), p.get("artist"), p.get("elapsedTimeMicros", p.get("elapsedTime")),
+               p.get("timestampEpochMicros", p.get("timestamp")), paused, p.get("playbackRate"))
+        if key == s["key"]:
+            return
+        s["key"] = key
+        now = time.time()
+        try:
+            position, anchor, duration = _times(p)
+            st = dict(track=p["title"], artist=p.get("artist", ""), bundle=p.get("bundleIdentifier", ""),
+                      album=p.get("album", ""), duration=duration, position=position,
+                      rate=0.0 if paused else float(p.get("playbackRate") or 1))
+        except (TypeError, ValueError):
+            return
+        with _lock:
+            h = _np.get("hint")
+            if h and now - h[1] < 1.5 and not paused and _np["state"] \
+                    and _np["state"]["track"] == st["track"] \
+                    and abs(st["position"] + (now - anchor) * st["rate"] - (h[0] + (now - h[1]))) > 2:
+                return               # an update still from before the seek: the seek hint stands
+            _np["state"] = st
+            _np["anchor"] = anchor
+
+    def watch():
+        """While a browser item is held back: is the music still playing? Spotify and Music send nothing through
+        the feed meanwhile (the browser owns it), so their song and position are asked for directly."""
+        while True:
+            time.sleep(4)
+            if s["held"] is None:
+                continue
+            try:
+                with gate:
+                    p = s["held"]
+                    if p is None:
+                        continue
+                    bundle, playing = s["shown"]
+                    m = player() if playing and bundle in MUSIC_APPS else None
+                    if m is None:                            # the music stopped: the browser's turn
+                        s["held"] = None
+                        handle(p)
+                        continue
+                    with _lock:
+                        st = _np["state"]
+                        est = st["position"] + (time.time() - _np["anchor"]) * st["rate"] if st else None
+                        same = bool(st) and st["track"] == m["track"] and abs(est - m["position"]) < 2
+                    if not same:                             # next song, or a seek, that the feed didn't report
+                        now = int(time.time() * 1e6)
+                        handle({"title": m["track"], "artist": m["artist"], "album": m["album"], "bundleIdentifier": m["bundle"],
+                                "playing": True, "playbackRate": 1, "durationMicros": int(m["duration"] * 1e6),
+                                "elapsedTimeMicros": int(m["position"] * 1e6), "timestampEpochMicros": now})
+            except Exception as e:
+                note(f"held-back watcher: {type(e).__name__}")
+    threading.Thread(target=watch, daemon=True).start()
+
     while True:
         proc, got = None, False
         try:
@@ -330,44 +419,20 @@ def _stream():
                 _np["up"] = True
                 try:
                     msg = json.loads(line)
-                    p = (msg.get("payload") if isinstance(msg, dict) else None) or {}
-                    if not isinstance(p, dict):
-                        continue
-                    timing = _keep_times(p, timing)
-                    last_art = _publish(p, last_art)
-                except (ValueError, TypeError, OSError):
-                    continue                     # one odd event (or a failed write) must not restart the stream
-                if not p.get("title"):
-                    with _lock: _np["state"] = None
-                    last_key = None
+                except ValueError:
                     continue
-                paused = not p.get("playing")        # keep the song while paused so its lyric line stays up
-                # the rate matters too: buffering (0) → playing (1) at the same position must restart the clock
-                key = (p.get("title"), p.get("artist"), p.get("elapsedTimeMicros", p.get("elapsedTime")),
-                       p.get("timestampEpochMicros", p.get("timestamp")), paused, p.get("playbackRate"))
-                if key == last_key:
+                p = (msg.get("payload") if isinstance(msg, dict) else None) or {}
+                if not isinstance(p, dict):
                     continue
-                last_key = key
-                now = time.time()
-                try:
-                    position, anchor, duration = _times(p)
-                    st = dict(track=p["title"], artist=p.get("artist", ""), bundle=p.get("bundleIdentifier", ""),
-                              album=p.get("album", ""), duration=duration, position=position,
-                              rate=0.0 if paused else float(p.get("playbackRate") or 1))
-                except (TypeError, ValueError):
-                    continue
-                with _lock:
-                    h = _np.get("hint")
-                    if h and now - h[1] < 1.5 and not paused and _np["state"] \
-                            and _np["state"]["track"] == st["track"] \
-                            and abs(st["position"] + (now - anchor) * st["rate"] - (h[0] + (now - h[1]))) > 2:
-                        continue     # an update still from before the seek: the seek hint stands
-                    _np["state"] = st
-                    _np["anchor"] = anchor
+                with gate:
+                    if not hold(p):
+                        handle(p)
         except Exception as e:
             note(f"media-control stream failed: {type(e).__name__}")
         finally:
             _np["up"] = False
+            with gate:
+                s["held"] = None
             with _lock:
                 _np["state"] = None              # nothing is known while the stream is down
             if proc is not None:                 # never leave an old media-control running
@@ -412,8 +477,13 @@ def now_playing():
     # LyricsBar is the Now Playing app: its own clock is the truth (song included: Now Playing lags behind
     # on song changes and crossfades too). While playing it's rewritten at least every 10 s, so an older
     # one is from a LyricsBar that quit or hung.
-    if c and c["bundle"] and c["bundle"] == st.get("bundle") and (c["rate"] == 0 or now - c["at"] < 20):
-        st.update(track=c["track"], artist=c["artist"], album=c["album"], duration=c["duration"],
+    # The same goes while LyricsBar plays and a browser holds Now Playing (a video, or a silent preview):
+    # the bar stays on the music, so the lyrics do too.
+    fresh = now - c["at"] < 20 if c else False
+    if c and c["bundle"] and ((c["bundle"] == st.get("bundle") and (c["rate"] == 0 or fresh))
+                              or (c["rate"] > 0 and fresh and _is_browser(st.get("bundle", ""))
+                                  and setting("musicOverBrowsers", True))):
+        st.update(track=c["track"], artist=c["artist"], album=c["album"], duration=c["duration"], bundle=c["bundle"],
                   rate=c["rate"], position=c["position"] + (now - c["at"]) * c["rate"])
     return st
 

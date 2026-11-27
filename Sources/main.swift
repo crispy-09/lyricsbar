@@ -1143,8 +1143,20 @@ enum NowPlayingFilter {
     static let browserPauseGrace = 5.0
     static var browserPaused: (key: String, at: Date)?
     static var recheckAt: Date?                 // when a paused browser item runs out: the bar must look again then
+    /// Music comes before browsers: while LyricsBar's own player plays, whatever a browser reports (a video, or a
+    /// silent thumbnail preview) doesn't take the bar and doesn't pause the music.
+    static var overBrowser = false
     static func ignored(_ j: [String: Any]) -> Bool {
         let bundle = j["bundle"] as? String ?? ""
+        overBrowser = cfg.musicOverBrowsers && StreamPlayer.shared.isPlaying && !(j["title"] as? String ?? "").isEmpty
+            && DiscordPresence.isBrowser(bundle)
+        if overBrowser {
+            // a paused one has had its time: when the music stops, it doesn't come up for another few seconds
+            if !(j["playing"] as? Bool ?? false) {
+                browserPaused = (bundle + "|" + (j["title"] as? String ?? ""), .distantPast); recheckAt = nil
+            }
+            return true
+        }
         if j["playing"] as? Bool ?? false { seenPlaying.insert(bundle); browserPaused = nil; recheckAt = nil; return false }
         if DiscordPresence.isBrowser(bundle) {
             let key = bundle + "|" + (j["title"] as? String ?? "")
@@ -3127,6 +3139,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     let view = BarView(frame: NSRect(origin: .zero, size: barSize))
     var wallpaperKey = ""
     var lastState = Data()
+    var ownWasPlaying = false
     var rawState: [String: Any] = [:]       // the system's Now Playing item as lyricsd reports it, ignored or not
     var lastArtMtime: Date?
     var lastTitle = ""
@@ -3637,31 +3650,39 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
     func tick() {
         DiscordPresence.shared.tick()
         if let due = NowPlayingFilter.recheckAt, Date() >= due { NowPlayingFilter.recheckAt = nil; lastState = Data() }
+        // the music started or stopped: whether a browser's item counts depends on it
+        let ownNow = StreamPlayer.shared.isPlaying
+        if ownNow != ownWasPlaying { ownWasPlaying = ownNow; if DiscordPresence.isBrowser(rawState["bundle"] as? String ?? "") { lastState = Data() } }
         if let d = FileManager.default.contents(atPath: home + "/state.json"), d != lastState,
            let raw = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
             lastState = d
             rawState = raw
             npIgnored = NowPlayingFilter.ignored(raw)
-            let j: [String: Any] = npIgnored ? [:] : raw         // a stale paused app: as if nothing were playing
-            view.setPlaying(j["playing"] as? Bool ?? false)
-            view.bundleId = j["bundle"] as? String ?? ""
-            view.duration = j["duration"] as? Double ?? 0
-            view.elapsedAt = (j["elapsed"] as? Double ?? 0, j["anchor"] as? Double ?? 0, j["rate"] as? Double ?? 0)
-            let title = j["title"] as? String ?? ""
-            sysTitle = title
-            if title != lastTitle {
-                lastTitle = title; view.localSeek = nil; titleChangedAt = Date()
-                DispatchQueue.main.async { self.view.updateExtras() }
-                lastArtist = j["artist"] as? String ?? ""
-                view.showTitleCard(title, lastArtist, slideIn: view.outroActive)
-                outroFor = ""
-            }
-            view.currentTitle = title
-            view.currentArtist = lastArtist
-            let sp = StreamPlayer.shared
-            if (j["playing"] as? Bool ?? false), (j["bundle"] as? String ?? "") != Bundle.main.bundleIdentifier,
-               sp.isPlaying, Date().timeIntervalSince(sp.startedAt) > 3 {
-                sp.pause()   // another player took over
+            if NowPlayingFilter.overBrowser {
+                // the music keeps the bar: nothing about it changes, the own-player display below carries on
+                sysTitle = ""
+            } else {
+                let j: [String: Any] = npIgnored ? [:] : raw         // a stale paused app: as if nothing were playing
+                view.setPlaying(j["playing"] as? Bool ?? false)
+                view.bundleId = j["bundle"] as? String ?? ""
+                view.duration = j["duration"] as? Double ?? 0
+                view.elapsedAt = (j["elapsed"] as? Double ?? 0, j["anchor"] as? Double ?? 0, j["rate"] as? Double ?? 0)
+                let title = j["title"] as? String ?? ""
+                sysTitle = title
+                if title != lastTitle {
+                    lastTitle = title; view.localSeek = nil; titleChangedAt = Date()
+                    DispatchQueue.main.async { self.view.updateExtras() }
+                    lastArtist = j["artist"] as? String ?? ""
+                    view.showTitleCard(title, lastArtist, slideIn: view.outroActive)
+                    outroFor = ""
+                }
+                view.currentTitle = title
+                view.currentArtist = lastArtist
+                let sp = StreamPlayer.shared
+                if (j["playing"] as? Bool ?? false), (j["bundle"] as? String ?? "") != Bundle.main.bundleIdentifier,
+                   sp.isPlaying, Date().timeIntervalSince(sp.startedAt) > 3 {
+                    sp.pause()   // another player took over
+                }
             }
         }
         if rawState["playing"] as? Bool ?? false {
@@ -3673,7 +3694,8 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
         }
         useOwnPlayerFallback()
         view.refreshSpeed()
-        if !npIgnored, let s = try? String(contentsOfFile: home + "/current.txt", encoding: .utf8) {
+        // (when a browser item is ignored because music plays, lyricsd follows the music, so its line is the right one)
+        if !npIgnored || NowPlayingFilter.overBrowser, let s = try? String(contentsOfFile: home + "/current.txt", encoding: .utf8) {
             let line = s.trimmingCharacters(in: .whitespacesAndNewlines)
             // no lyrics: lyricsd writes "♪ Title — Artist"; keep the title display instead
             let noLyrics = "♪ \(lastTitle) — \(lastArtist)".trimmingCharacters(in: .whitespacesAndNewlines)
