@@ -95,7 +95,7 @@ The app has debug hooks: write a command to `~/.touchbar-lyrics/debug.cmd`, then
 | `spqpl`, `spqpl N` | List Spotify playlists, or queue playlist N (the picker's hold action). **This changes the real queue**, so use a small playlist |
 | `regular on` / `regular off` | Hand the Touch Bar to macOS (as the strip's "regular Touch Bar" button does) / take it back |
 | `playingshows lyrics\|controls\|title`, `buttons on\|off`, `kbd`, `more` (toggle the ‹ extras), `outro` (show Up Next now with a sample next song), `swipe DX [back]` (simulated drag on the lyric; `back` returns to the middle), `lyricstate` (lyric label state to debug.out) | Set what the bar shows while playing; show/hide all optional strip buttons (keyboard light, Siri, Screenshot, regular bar); read the keyboard backlight. These change the config |
-| `esc` | Press the Esc button (sends the Esc key to the frontmost app) |
+| `esc`, `esc on` / `esc off` | Press the Esc button (sends the Esc key to the frontmost app) / show or hide it (changes the config) |
 | `mutedtest` | Muted playback self-test (play, next, seek, crossfade, previous, pause, restore). No sound, no scrobbles; the log goes to `debug.out` |
 
 Other signals: `SIGUSR1` toggles the media controls and `SIGUSR2` opens the volume slider.

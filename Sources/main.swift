@@ -1392,6 +1392,7 @@ final class BarView: NSView {
     var castBtn: PillButton!
     var speedBtn: PillButton!
     var escBtn: PillButton!
+    lazy var artLead = artButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8)   // moves right for Esc
     var speedFor = "", speedBundle = ""       // the item (and app) the speed button was last set up for
     var speedPodcast = false, speedShown = false
     var speedSeen = 1.0, speedAsked = 1.0, speedAskedUntil = Date.distantPast
@@ -1600,14 +1601,14 @@ final class BarView: NSView {
         shotBtn = PillButton(symbol("camera.viewfinder", 14), self, #selector(openScreenshot), width: 52)
         regularBtn = PillButton(symbol("rectangle.badge.xmark", 14), self, #selector(regularBar), width: 52)
         castBtn = PillButton(symbol("airplayaudio", 14), self, #selector(openCast), width: 52)
-        escBtn = PillButton(nil, self, #selector(pressEsc), width: 52)
+        escBtn = PillButton(nil, self, #selector(pressEsc), width: 56)
         escBtn.imagePosition = .noImage
         escBtn.attributedTitle = NSAttributedString(string: "esc", attributes: [
             .font: NSFont.systemFont(ofSize: 14, weight: .medium), .foregroundColor: NSColor.white])
         speedBtn = PillButton(nil, self, #selector(stepSpeed), width: 52)
         speedBtn.imagePosition = .noImage
         moreBtn = PillButton(symbol("chevron.left", 13, .bold), self, #selector(toggleStripExpanded), width: 34)
-        strip = Capsule([moreBtn, escBtn, speedBtn, castBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
+        strip = Capsule([moreBtn, speedBtn, castBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
         for (btn, panel) in [(briBtn!, Panel.brightness), (volBtn!, .volume), (kbdBtn!, .keyboard)] {
             let o = SlideOverlay()
             fill(o, in: btn)
@@ -1641,12 +1642,14 @@ final class BarView: NSView {
         panel.isHidden = true
         panel.setContentHuggingPriority(.required, for: .horizontal)
 
-        for v in [artButton, vizCompact, lyric, mediaView, pickerRow!, strip!, panel!] as [NSView] {
+        for v in [escBtn!, artButton, vizCompact, lyric, mediaView, pickerRow!, strip!, panel!] as [NSView] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         NSLayoutConstraint.activate([
-            artButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            escBtn.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            escBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            artLead,
             artButton.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             vizCompact.leadingAnchor.constraint(equalTo: artButton.trailingAnchor, constant: 6),
@@ -1706,6 +1709,8 @@ final class BarView: NSView {
         lyric.font = .systemFont(ofSize: cfg.lyricFontSize, weight: .semibold)
         tint.layer?.backgroundColor = NSColor.black.withAlphaComponent(cfg.dimAmount).cgColor
         applyStripButtons()
+        escBtn.isHidden = !cfg.showEsc
+        artLead.constant = cfg.showEsc ? 68 : 8
         strip.isHidden = panelMode != .none || !anyStripButton
         if !pickerMode { shuffle = cfg.defaultShuffle }
         applyVisualizer()
@@ -2966,7 +2971,7 @@ final class BarView: NSView {
     /// Extras show only while expanded (‹ / ›); they fold away again after a few seconds.
     var stripButtons: [String: NSView] {
         ["brightness": briBtn, "volume": volBtn, "library": appsBtn, "keyboard": kbdBtn, "siri": siriBtn,
-         "screenshot": shotBtn, "regular": regularBtn, "cast": castBtn, "speed": speedBtn, "esc": escBtn]
+         "screenshot": shotBtn, "regular": regularBtn, "cast": castBtn, "speed": speedBtn]
     }
     /// Lays the buttons out in the user's order; "Behind ‹" ones only show while expanded.
     func applyStripButtons() {
@@ -3347,6 +3352,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    return
                                }
                                if c == "esc" { self.view.pressEsc(); return }      // presses the Esc button
+                               if c == "esc on" || c == "esc off" { ConfigStore.shared.c.showEsc = c == "esc on"; return }
                                if c.hasPrefix("speed") {                  // "speed": the button's state; "speed step" presses it; "speed only on|off"
                                    if c.contains("step") { self.view.stepSpeed() }
                                    if c.contains("only") { ConfigStore.shared.c.speedPodcastsOnly = !c.contains("off") }
