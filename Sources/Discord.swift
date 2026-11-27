@@ -45,13 +45,15 @@ final class DiscordPresence: ObservableObject {
         }
         // A browser also announces the silent previews that play while the mouse rests on a thumbnail. Those never
         // go on the profile: a browser's item counts once the browser is heard, and then for as long as it stays up.
+        var unheard = false
         if Self.isBrowser(s.bundle), !s.title.isEmpty {
             let item = s.bundle + "|" + s.title
             if s.playing, AudioTap.isAudible(s.bundle) { heard = item }
-            if heard != item { s = Snapshot() }
+            if heard != item { s = Snapshot(); unheard = true }
         }
         let sp = StreamPlayer.shared
-        if (s.title.isEmpty || s.bundle == Bundle.main.bundleIdentifier), sp.active, sp.tracks.indices.contains(sp.index) {
+        if (s.title.isEmpty || s.bundle == Bundle.main.bundleIdentifier), sp.active, sp.tracks.indices.contains(sp.index),
+           !unheard || sp.isPlaying {
             let t = sp.tracks[sp.index]
             s.title = t.title; s.artist = t.artist; s.album = t.album; s.duration = t.duration
             s.bundle = Bundle.main.bundleIdentifier ?? ""

@@ -86,8 +86,11 @@ BROWSERS = ("com.apple.safari", "com.apple.webkit", "com.google.chrome", "org.ch
 def _is_browser(bundle):
     return bundle.lower().startswith(BROWSERS)
 
+def _ytdlp_path():
+    return shutil.which("yt-dlp") or next((x for x in ("/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp") if os.path.exists(x)), None)
+
 def _ytdlp(args, timeout=45):
-    exe = shutil.which("yt-dlp") or next((x for x in ("/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp") if os.path.exists(x)), None)
+    exe = _ytdlp_path()
     if not exe:
         return None
     env = dict(os.environ, PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", "/usr/bin:/bin"))
@@ -126,12 +129,14 @@ def captions_for(p):
     dur = p.get("duration") or 0
     if not p.get("track"):
         return []
-    if dur <= 0 or time.time() < _yt["wait_until"]:
-        return None                              # no length yet (so no telling which video it is), or YouTube said no: later
+    if dur <= 0:
+        return []                                # no length, so no telling which video it is
+    if time.time() < _yt["wait_until"]:
+        return None                              # YouTube said no a moment ago: later
     try:
         found = _ytdlp(["--flat-playlist", "ytsearch5:" + (p["track"] + " " + p.get("artist", "")).strip()])
         if found is None:
-            return None if shutil.which("yt-dlp") or os.path.exists("/opt/homebrew/bin/yt-dlp") else []
+            return None if _ytdlp_path() else []     # not installed: no captions; installed but failed: ask again
         norm = lambda s: re.sub(r"\W+", "", (s or "").lower())
         vid = next((e["id"] for e in found.get("entries") or []
                     if e.get("id") and norm(e.get("title")) == norm(p["track"]) and abs((e.get("duration") or 0) - dur) <= 2), None)
@@ -180,6 +185,10 @@ def lyrics_for(p):
             pass
     synced = None
     dur = p.get("duration") or 0                 # some players report 0 at first
+    # a video with no length yet (it usually follows within seconds), or YouTube refusing lookups for now: wait
+    # without asking anyone. After a few tries a missing length is taken as final and it goes on as for a song.
+    if captions and ((dur <= 0 and p.get("tries", 0) < 3) or (time.time() < _yt["wait_until"] and p.get("tries", 0) > 0)):
+        return None
     try:
         params = dict(artist_name=p["artist"], track_name=p["track"], album_name=p["album"])
         if dur > 0:
@@ -289,9 +298,9 @@ def _keep_times(p, last):
     key, now = (p.get("bundleIdentifier"), p.get("title")), time.time()
     if "elapsedTimeMicros" in p or "elapsedTime" in p:
         el, anchor, dur = _times(p)
-    elif last and last["key"] == key and p.get("title"):
+    elif last and last["key"] == key and p.get("title") and _is_browser(p.get("bundleIdentifier") or ""):
         el = last["el"] + (now - last["anchor"]) * last["rate"]
-        dur = last["dur"]
+        dur = _times(p)[2] or last["dur"]
         if dur > 0:
             el = min(el, dur)
         anchor = now
@@ -486,7 +495,7 @@ def main():
                     write(last_written, clip=False)
                 if lines is None and not looking and time.time() >= retry_at:
                     looking = True
-                    threading.Thread(target=_lookup, args=(k, dict(state)), daemon=True).start()
+                    threading.Thread(target=_lookup, args=(k, dict(state, tries=tries)), daemon=True).start()
                 if looking:
                     with _lock:
                         done, got = k in _found, _found.pop(k, None)

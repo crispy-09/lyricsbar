@@ -448,10 +448,9 @@ final class StreamPlayer: NSObject, ObservableObject {
     /// Playback speed of the built-in player (pitch is kept). Every play() starts at it.
     var speed: Double = 1 {
         didSet {
-            for p in [pa, pb] {
-                p.defaultRate = Float(speed)
-                if p.rate != 0 { p.rate = Float(speed) }       // playing or about to: change it now
-            }
+            for p in [pa, pb] { p.defaultRate = Float(speed) }
+            // playing or about to: change it now (not the song fading out during a crossfade: it keeps its speed)
+            if cur.rate != 0 { cur.rate = Float(speed) }
             updateInfo()
         }
     }
@@ -1394,7 +1393,7 @@ final class BarView: NSView {
     var speedBtn: PillButton!
     var speedFor = "", speedBundle = ""       // the item (and app) the speed button was last set up for
     var speedPodcast = false, speedShown = false
-    var speedSeen = 1.0, speedAskedUntil = Date.distantPast
+    var speedSeen = 1.0, speedAsked = 1.0, speedAskedUntil = Date.distantPast
     var panelIcon: PillButton!
     let panelSlider = ScrubBar()
 
@@ -2311,15 +2310,15 @@ final class BarView: NSView {
     var wordsData = Data(), wordsText = "", wordTimes: [(t: Double, end: Int)] = []   // end = where the word ends in the line
     var wordsLit = -1
     var wordTimer: Timer?
-    func lightWords() {
+    func lightWords(reload: Bool = true) {
         var on = false
         defer {
             if on, wordTimer == nil {            // words change faster than the bar's regular tick
-                wordTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.lightWords() }
+                wordTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.lightWords(reload: false) }
             } else if !on { wordTimer?.invalidate(); wordTimer = nil }
         }
-        guard cfg.captionWords, let d = FileManager.default.contents(atPath: home + "/words.json") else { return }
-        if d != wordsData {
+        guard cfg.captionWords else { return }
+        if reload, let d = FileManager.default.contents(atPath: home + "/words.json"), d != wordsData {
             wordsData = d; wordsText = ""; wordTimes = []
             if let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let text = j["text"] as? String,
                let list = j["words"] as? [[Any]] {
@@ -2334,7 +2333,7 @@ final class BarView: NSView {
             }
         }
         guard !wordsText.isEmpty, wordsText == lyricKey, Date() >= titleCardUntil, !pausedActive, !swipeDragging else { return }
-        on = true
+        on = isPlaying                           // paused: nothing moves, the timer can rest
         let pos = position + cfg.lyricOffset - AudioOutput.lyricDelay
         let n = wordTimes.lastIndex { $0.t <= pos }.map { $0 + 1 } ?? 0
         guard n != wordsLit else { return }
@@ -2388,7 +2387,7 @@ final class BarView: NSView {
             return l.pos + (isPlaying ? now - l.t : 0)
         }
         // Spotify reports rate 1 whatever speed a podcast plays at
-        let rate = elapsedAt.rate * (speedIsSpotify && elapsedAt.rate == 1 ? speedSeen : 1)
+        let rate = elapsedAt.rate * (speedIsSpotify && speedPodcast && elapsedAt.rate == 1 ? speedSeen : 1)
         return elapsedAt.pos + (now - elapsedAt.t) * rate
     }
 
@@ -2957,13 +2956,23 @@ final class BarView: NSView {
         let usable = { (s: StripSlot) in (s.id != "keyboard" || KeyboardLight.available) && (s.id != "speed" || self.speedButtonWanted) }
         let extras = cfg.stripExpand != "off" && layout.contains { $0.place == "more" && usable($0) }
         if !extras && stripExpanded { setStripExpanded(false, restore: true) }
-        let views: [NSView]
+        var views: [NSView] = []
+        // Speed, when it's on the bar, sits just left of ‹: it comes and goes with what's playing, and there it
+        // doesn't shift the buttons that are always present
+        let speedLeft: [NSView] = layout.contains { $0.id == "speed" && $0.place == "bar" } ? [speedBtn] : []
+        let rest = layout.filter { $0.id != "speed" || speedLeft.isEmpty }
         if cfg.stripExpand == "inline" {
-            views = [moreBtn] + layout.compactMap { stripButtons[$0.id] }
+            views = speedLeft
+            views.append(moreBtn)
+            views += rest.compactMap { self.stripButtons[$0.id] }
         } else {
             // outward: the bar's buttons stay put, extras open to the left of ‹
-            let ids = { (p: String) in layout.filter { $0.place == p }.compactMap { self.stripButtons[$0.id] } }
-            views = ids("more") + [moreBtn] + ids("bar") + ids("off")
+            let ids = { (p: String) -> [NSView] in rest.filter { $0.place == p }.compactMap { self.stripButtons[$0.id] } }
+            views = ids("more")
+            views += speedLeft
+            views.append(moreBtn)
+            views += ids("bar")
+            views += ids("off")
         }
         if strip.stack.arrangedSubviews != views {
             for v in views { strip.stack.removeArrangedSubview(v); v.removeFromSuperview(); strip.stack.addArrangedSubview(v) }

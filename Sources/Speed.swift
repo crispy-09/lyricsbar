@@ -128,11 +128,12 @@ extension BarView {
         if !speedIsSpotify, isPlaying, elapsedAt.rate > 0, Date() >= speedAskedUntil { speedSeen = elapsedAt.rate }
         return speedSeen
     }
+    var speedSlotOn: Bool { StripSlot.normalized(cfg.stripLayout).contains { $0.id == "speed" && $0.place != "off" } }
     var speedButtonWanted: Bool { !speedKey.isEmpty && (!cfg.speedPodcastsOnly || speedPodcast) }
 
     /// Called on every tick: finds out whether a new item is a podcast and keeps the button up to date.
     func refreshSpeed() {
-        let key = speedKey
+        let key = speedSlotOn ? speedKey : ""
         if key != speedFor {
             speedFor = key
             if key.hasPrefix("own|") {
@@ -141,10 +142,11 @@ extension BarView {
                 if key.isEmpty || !key.hasPrefix(speedBundle + "|") { speedSeen = 1 }   // another app: its speed isn't known yet
                 speedBundle = bundleId
                 speedPodcast = PlaybackSpeed.podcastApps.contains(bundleId)
-                if !key.isEmpty {
+                if !key.isEmpty, speedSlotOn {
                     PlaybackSpeed.detect(bundle: bundleId) { [weak self] yes in
                         guard let self, self.speedFor == key else { return }
                         self.speedPodcast = yes
+                        if !yes, self.speedIsSpotify { self.speedSeen = 1 }      // Spotify only speeds up episodes
                         if yes, self.speedIsSpotify {
                             SpotifySpeed.read { [weak self] v in
                                 guard let self, let v, self.speedFor == key, Date() >= self.speedAskedUntil else { return }
@@ -164,7 +166,8 @@ extension BarView {
         }
         if speedButtonWanted != speedShown {
             speedShown = speedButtonWanted
-            applyConfig()                       // the strip (and whether there is one at all) depends on it
+            applyStripButtons()                 // the strip, and whether there is one at all, depends on it
+            strip.isHidden = panelMode != .none || !anyStripButton
         }
     }
 
@@ -191,12 +194,17 @@ extension BarView {
                                              : "Spotify only changes speed for podcasts", seconds: 3)
             }
         } else {
-            run(mediaControl, ["speed", String(v)])
+            // the system command (as media-control sends it) only takes whole speeds
+            let v: Double = currentSpeed < 1.5 ? 2 : 1
+            let key = speedFor
+            run(mediaControl, ["speed", String(Int(v))])
             speedSeen = v
+            speedAsked = v
             speedAskedUntil = Date().addingTimeInterval(1.5)     // until the app reports back
             // an app that doesn't take the command still reports 1×: say so instead of showing a speed it isn't at
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                guard let self, !self.speedIsOwn, self.isPlaying, abs(self.currentSpeed - v) > 0.01 else { return }
+                guard let self, self.speedFor == key, self.speedAsked == v, self.isPlaying,
+                      abs(self.currentSpeed - v) > 0.01 else { return }
                 self.toast("This app doesn't let the speed be changed", seconds: 3)
             }
         }
