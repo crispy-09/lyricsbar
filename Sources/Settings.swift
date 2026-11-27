@@ -66,7 +66,7 @@ struct GeneralPane: View {
                 Toggle("Shuffle Subsonic playlists by default", isOn: $store.c.defaultShuffle)
                 Toggle("Pause other players when starting a playlist", isOn: $store.c.pauseOthers)
                 Toggle("Ask which player to resume when several are paused", isOn: $store.c.askWhichPlayer)
-                Toggle("Music stays on the bar when a browser plays something", isOn: $store.c.musicOverBrowsers)
+                Toggle("Music stays on bar when browser plays", isOn: $store.c.musicOverBrowsers)
                 Text("While LyricsBar\u{2019}s player, Spotify or Apple Music is playing, a video (or a thumbnail preview) in a browser doesn\u{2019}t take over the bar or pause LyricsBar\u{2019}s music. When the music stops, the bar shows the video.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Resume the LyricsBar queue after a restart (paused)", isOn: $store.c.resumeQueue)
