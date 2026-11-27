@@ -142,6 +142,18 @@ final class AudioTap {
         }
     }
 
+    /// Is this app (or a helper of it) sending sound to an output right now? Volume and mute don't matter.
+    static func isAudible(_ bundle: String) -> Bool {
+        var procs = audioProcesses(for: bundle)
+        if bundle.lowercased().hasPrefix("com.apple.safari") { procs += audioProcesses(for: "com.apple.WebKit") }   // Safari's sound comes from WebKit's process
+        return procs.contains { id in
+            var a = AudioObjectPropertyAddress(mSelector: kAudioProcessPropertyIsRunningOutput, mScope: kAudioObjectPropertyScopeGlobal,
+                                               mElement: kAudioObjectPropertyElementMain)
+            var on: UInt32 = 0, sz = UInt32(MemoryLayout<UInt32>.size)
+            return AudioObjectGetPropertyData(id, &a, 0, nil, &sz, &on) == noErr && on != 0
+        }
+    }
+
     private func setupTap(bundle: String) throws {
         let procs = bundle.isEmpty ? [] : Self.audioProcesses(for: bundle)
         tappedProcesses = procs.count

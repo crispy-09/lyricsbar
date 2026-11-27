@@ -793,7 +793,7 @@ struct DiscordPane: View {
                     .font(.caption).foregroundStyle(.secondary)
                 if store.c.discordPlayers != "own" {
                     Toggle("Include web browsers", isOn: $store.c.discordBrowsers)
-                    Text("A browser reports whatever tab is making sound, including videos, so it's left out unless you turn this on.")
+                    Text("A browser reports whatever tab is playing, including videos, so it's left out unless you turn this on. Silent previews on hover are never shown.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Toggle("Show album art (looked up on Apple's public iTunes Search)", isOn: $store.c.discordAlbumArt)

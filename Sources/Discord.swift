@@ -21,6 +21,7 @@ final class DiscordPresence: ObservableObject {
     // main thread
     private var lastEval = Date.distantPast
     private var wasOn = false
+    private var heard = ""                       // the browser item (bundle|title) last heard making sound
     private var art: [String: String] = [:]        // "artist|album" → artwork URL ("" = none found)
     private var artLoading = Set<String>()
     private var artFailedAt: [String: Date] = [:]  // network errors: try again after a minute
@@ -41,6 +42,13 @@ final class DiscordPresence: ObservableObject {
             let el = j["elapsed"] as? Double ?? 0, anchor = j["anchor"] as? Double ?? 0, rate = j["rate"] as? Double ?? 0
             s.elapsed = el + (s.playing ? (Date().timeIntervalSince1970 - anchor) * rate : 0)
             s.duration = j["duration"] as? Double ?? 0
+        }
+        // A browser also announces the silent previews that play while the mouse rests on a thumbnail. Those never
+        // go on the profile: a browser's item counts once the browser is heard, and then for as long as it stays up.
+        if Self.isBrowser(s.bundle), !s.title.isEmpty {
+            let item = s.bundle + "|" + s.title
+            if s.playing, AudioTap.isAudible(s.bundle) { heard = item }
+            if heard != item { s = Snapshot() }
         }
         let sp = StreamPlayer.shared
         if (s.title.isEmpty || s.bundle == Bundle.main.bundleIdentifier), sp.active, sp.tracks.indices.contains(sp.index) {
