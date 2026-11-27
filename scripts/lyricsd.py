@@ -95,19 +95,28 @@ def _ytdlp(args, timeout=45):
     return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
 
 def _caption_lines(events):
-    """json3 caption events → [(seconds, text)]. A caption stays up until the next one; after a real gap
-    (nobody speaks) the line is cleared. Automatic captions overlap each other, so they never clear."""
+    """json3 caption events → [(seconds, text, words)], words = [[seconds, word], …] when the captions time each
+    word (the automatic ones do), else []. A caption stays up until the next one; after a real gap (nobody
+    speaks) the line is cleared. Automatic captions overlap each other, so they never clear."""
     caps = []
     for e in events:
-        text = re.sub(r"\s+", " ", "".join(x.get("utf8", "") for x in e.get("segs") or [])).strip()
+        segs = e.get("segs") or []
+        t = (e.get("tStartMs") or 0) / 1000.0
+        text = re.sub(r"\s+", " ", "".join(x.get("utf8", "") for x in segs)).strip()
+        words = []
+        if any("tOffsetMs" in x for x in segs):
+            for x in segs:                       # one segment per word (sometimes two words), each with its start
+                w = re.sub(r"\s+", " ", x.get("utf8", "")).strip()
+                if w:
+                    words.append([round(t + (x.get("tOffsetMs") or 0) / 1000.0, 3), w])
+            text = " ".join(w for _, w in words)
         if text and not (caps and caps[-1][2] == text):
-            t = (e.get("tStartMs") or 0) / 1000.0
-            caps.append((t, t + (e.get("dDurationMs") or 0) / 1000.0, text))
+            caps.append((t, t + (e.get("dDurationMs") or 0) / 1000.0, text, words))
     lines = []
-    for i, (t, end, text) in enumerate(caps):
-        lines.append((t, text))
+    for i, (t, end, text, words) in enumerate(caps):
+        lines.append((t, text, words))
         if end > t and (i + 1 == len(caps) or caps[i + 1][0] - end > 1.5):
-            lines.append((end, ""))
+            lines.append((end, "", []))
     return lines
 
 _yt = {"wait_until": 0.0}
@@ -154,7 +163,7 @@ def captions_for(p):
 def lyrics_for(p):
     captions = _is_browser(p.get("bundle", "")) and bool(setting("videoCaptions", False))
     # videos are remembered apart from songs: "no lyrics" for a title mustn't hide its captions
-    key = hashlib.md5((("video|" if captions else "") + f"{p['artist']}|{p['track']}").lower().encode()).hexdigest()
+    key = hashlib.md5((("video2|" if captions else "") + f"{p['artist']}|{p['track']}").lower().encode()).hexdigest()
     path = os.path.join(CACHE, key + ".json")
     try:
         with open(path) as f:
@@ -245,6 +254,7 @@ def _times(p):
             float(p.get("duration") or 0))
 
 STATE = os.path.join(HOME, "state.json")
+WORDS = os.path.join(HOME, "words.json")      # {"text": line, "words": [[seconds, word], …]} for the line in current.txt
 ART = os.path.join(HOME, "artwork.jpg")
 
 def _publish(p, last_art):
@@ -272,9 +282,29 @@ def _publish(p, last_art):
     os.replace(STATE + ".tmp", STATE)
     return last_art
 
+def _keep_times(p, last):
+    """Browsers send some updates (pause, resume, a metadata change) with no position or length at all. Read as
+    they stand those mean "back at 0:00", so for the same item the position carries on from the last one known.
+    Returns what to remember for the next event."""
+    key, now = (p.get("bundleIdentifier"), p.get("title")), time.time()
+    if "elapsedTimeMicros" in p or "elapsedTime" in p:
+        el, anchor, dur = _times(p)
+    elif last and last["key"] == key and p.get("title"):
+        el = last["el"] + (now - last["anchor"]) * last["rate"]
+        dur = last["dur"]
+        if dur > 0:
+            el = min(el, dur)
+        anchor = now
+        p["elapsedTimeMicros"], p["timestampEpochMicros"] = int(el * 1e6), int(now * 1e6)
+        p["durationMicros"] = int(dur * 1e6)
+    else:
+        return None
+    return dict(key=key, el=el, anchor=anchor, dur=dur,
+                rate=float(p.get("playbackRate") or 1) if p.get("playing") else 0.0)
+
 def _stream():
     """Follow the system Now Playing feed (works for Spotify, Music, browsers, any player...)."""
-    last_key, last_art = None, None
+    last_key, last_art, timing = None, None, None
     micros = True                                # exact timestamps; dropped if this media-control can't do them
     while True:
         proc, got = None, False
@@ -294,6 +324,7 @@ def _stream():
                     p = (msg.get("payload") if isinstance(msg, dict) else None) or {}
                     if not isinstance(p, dict):
                         continue
+                    timing = _keep_times(p, timing)
                     last_art = _publish(p, last_art)
                 except (ValueError, TypeError, OSError):
                     continue                     # one odd event (or a failed write) must not restart the stream
@@ -434,7 +465,7 @@ def main():
     threading.Thread(target=_stream, daemon=True).start()
     cur_key, lines, last_written, polled_at, as_state = None, None, None, 0, None
     looking, tries, retry_at = False, 0, 0.0
-    seek_seen = None
+    seek_seen, had_words = None, True
     while True:
         try:
             seek_seen = _apply_seek(seek_seen)
@@ -466,7 +497,7 @@ def main():
                             retry_at = time.time() + (5, 30, 120)[min(tries, 3) - 1]
                         else:
                             lines = got
-            title = False
+            title, words = False, []
             if not state:
                 text = ""
             elif not lines:
@@ -477,11 +508,18 @@ def main():
                 if _airplay():                   # AirPlay speakers play late and don't say by how much
                     pos -= max(0.0, float(setting("airplayLyricDelay", 1.0)))
                 text = ""
-                for t, w in lines:
-                    if t <= pos: text = w
+                for ln in lines:
+                    if ln[0] <= pos: text, words = ln[1], (ln[2] if len(ln) > 2 else [])
                     else: break
                 text = text or "♪"
             if text != last_written:
+                # word times of the line on screen, for the bar to light the words up as they're said
+                wtext = text if len(text) <= MAXLEN and words and text != "♪" else ""
+                if wtext or had_words:
+                    with open(WORDS + ".tmp", "w") as f:
+                        json.dump({"text": wtext, "words": words if wtext else []}, f)
+                    os.replace(WORDS + ".tmp", WORDS)
+                    had_words = bool(wtext)
                 write(text, clip=not title); last_written = text
         except Exception as e:                   # one bad pass must not take the daemon down (launchd would loop it)
             note(f"main loop: {type(e).__name__}: {e}")

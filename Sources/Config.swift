@@ -48,6 +48,7 @@ struct Config: Codable, Equatable {
     var showSpotify = true
     var speedPodcastsOnly = true      // the Speed button only shows while a podcast plays
     var podcastSpeed = 1.0            // built-in player: the speed podcasts were last played at
+    var captionWords = true           // captions that time each word: light the words up as they're said
     var videoCaptions = false         // captions of the YouTube video playing in a browser, shown like lyrics (needs yt-dlp)
     var defaultShuffle = false
     var pauseOthers = true

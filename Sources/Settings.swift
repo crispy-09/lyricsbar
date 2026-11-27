@@ -120,6 +120,7 @@ struct LyricsSections: View {
                 }
                 Toggle("Show song title when there are no synced lyrics", isOn: $store.c.showTitleWhenNoLyrics)
                 Toggle("Show captions for YouTube videos", isOn: $store.c.videoCaptions)
+                Toggle("Light up each word as it's said", isOn: $store.c.captionWords).disabled(!store.c.videoCaptions)
                 Text("When a browser plays a YouTube video, its captions are shown like lyrics. The video is found by searching YouTube for the title and channel the browser reports, so this needs yt-dlp (brew install yt-dlp) and only works for YouTube.")
                     .font(.caption).foregroundStyle(.secondary)
             }

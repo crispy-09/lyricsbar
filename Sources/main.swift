@@ -2300,8 +2300,48 @@ final class BarView: NSView {
         if Date() < titleCardUntil || pausedActive || swipeDragging { return }
         guard s != lyricKey else { return }
         lyricKey = s
+        wordsLit = -1
         animateLyric()
         lyric.attributedStringValue = NSAttributedString(string: s, attributes: lyricAttrs(.white))
+        lightWords()
+    }
+
+    // Captions that time each word (lyricsd writes them to words.json for the line on screen): the words said so
+    // far, the current one included, are white and the rest dimmed.
+    var wordsData = Data(), wordsText = "", wordTimes: [(t: Double, end: Int)] = []   // end = where the word ends in the line
+    var wordsLit = -1
+    var wordTimer: Timer?
+    func lightWords() {
+        var on = false
+        defer {
+            if on, wordTimer == nil {            // words change faster than the bar's regular tick
+                wordTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.lightWords() }
+            } else if !on { wordTimer?.invalidate(); wordTimer = nil }
+        }
+        guard cfg.captionWords, let d = FileManager.default.contents(atPath: home + "/words.json") else { return }
+        if d != wordsData {
+            wordsData = d; wordsText = ""; wordTimes = []
+            if let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let text = j["text"] as? String,
+               let list = j["words"] as? [[Any]] {
+                var at = 0
+                for e in list {
+                    guard e.count == 2, let t = (e[0] as? NSNumber)?.doubleValue, let w = e[1] as? String else { continue }
+                    at += (w as NSString).length
+                    wordTimes.append((t, at))
+                    at += 1                                   // the space after it
+                }
+                if at - 1 == (text as NSString).length { wordsText = text } else { wordTimes = [] }
+            }
+        }
+        guard !wordsText.isEmpty, wordsText == lyricKey, Date() >= titleCardUntil, !pausedActive, !swipeDragging else { return }
+        on = true
+        let pos = position + cfg.lyricOffset - AudioOutput.lyricDelay
+        let n = wordTimes.lastIndex { $0.t <= pos }.map { $0 + 1 } ?? 0
+        guard n != wordsLit else { return }
+        wordsLit = n
+        let a = NSMutableAttributedString(string: wordsText, attributes: lyricAttrs(NSColor.white.withAlphaComponent(0.4)))
+        if n > 0 { a.addAttribute(.foregroundColor, value: NSColor.white, range: NSRange(location: 0, length: wordTimes[n - 1].end)) }
+        lyric.attributedStringValue = a
     }
 
     /// What the lyric line shows while paused (Settings → General → While paused).
@@ -3528,7 +3568,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
             // no lyrics: lyricsd writes "♪ Title — Artist"; keep the title display instead
             let noLyrics = "♪ \(lastTitle) — \(lastArtist)".trimmingCharacters(in: .whitespacesAndNewlines)
             if !lastTitle.isEmpty && line == noLyrics { view.showTitleLine(lastTitle, lastArtist) }
-            else { view.setLyric(line) }
+            else { view.setLyric(line); view.lightWords() }
         }
         view.updateScrubber()
         let artPath = home + "/artwork.jpg"
