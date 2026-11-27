@@ -192,12 +192,12 @@ struct StripSlot: Codable, Equatable, Identifiable {
     static let names: [String: String] = ["brightness": "Brightness", "volume": "Volume", "library": "Library",
                                           "keyboard": "Keyboard brightness", "siri": "Siri", "screenshot": "Screenshot",
                                           "regular": "Switch to the regular Touch Bar", "cast": "Cast (Spotify Connect)",
-                                          "speed": "Playback speed"]
+                                          "speed": "Playback speed", "esc": "Esc key"]
     static let icons: [String: String] = ["brightness": "sun.max.fill", "volume": "speaker.wave.2.fill",
                                           "library": "books.vertical.fill", "keyboard": "light.max", "siri": "siri",
                                           "screenshot": "camera.viewfinder", "regular": "rectangle.badge.xmark",
-                                          "cast": "airplayaudio", "speed": "gauge.with.dots.needle.67percent"]
-    static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular", "cast", "speed"]
+                                          "cast": "airplayaudio", "speed": "gauge.with.dots.needle.67percent", "esc": "escape"]
+    static let order = ["brightness", "volume", "library", "keyboard", "siri", "screenshot", "regular", "cast", "speed", "esc"]
     static let defaults: [StripSlot] = order.map {
         StripSlot(id: $0, place: ["brightness", "volume", "library", "speed"].contains($0) ? "bar" : "off")
     }

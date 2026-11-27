@@ -88,6 +88,7 @@ A self-signed code-signing certificate is enough for restarts. Only an Apple-iss
 | Tap 📚 | Open / close the Library window |
 | Optional buttons (Settings → Appearance → Buttons) | Keyboard brightness (tap for a slider, or slide across it), Siri, Screenshot (the ⇧⌘5 toolbar), and **regular Touch Bar**. They sit behind a ‹ button on the right; tap it to show them (they fold away again after a few seconds) |
 | Regular Touch Bar button, or the menu bar icon's "Use the Regular Touch Bar" | Gives the Touch Bar back to macOS. A ♪ stays in the Control Strip: tap it (or use the menu bar icon) to bring LyricsBar back. It stays off across restarts until you do. The ♪ needs no setup, but only shows when the Touch Bar is set to show the Control Strip (System Settings → Keyboard → Touch Bar Settings) |
+| Tap esc (optional button, off by default) | Sends the Esc key to the app you're in. For Macs whose Touch Bar replaced the Esc key; needs the Accessibility permission |
 | Tap the speed button (1×) | Step the playback speed: 1×, 1.25×, 1.5×, 1.75×, 2×, then back to 1×. By default it only appears while a podcast plays (see below) |
 | Hold a playlist in the picker | Queue it next instead of playing it. For Spotify this works on playlists you made (up to 100 songs); Spotify doesn't let personal apps read playlists you only follow |
 | In Up Next, hold and drag a song | Reorder it, or drop it on the trash to remove it |

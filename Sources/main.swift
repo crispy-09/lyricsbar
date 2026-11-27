@@ -1391,6 +1391,7 @@ final class BarView: NSView {
     var volBtn: PillButton!
     var castBtn: PillButton!
     var speedBtn: PillButton!
+    var escBtn: PillButton!
     var speedFor = "", speedBundle = ""       // the item (and app) the speed button was last set up for
     var speedPodcast = false, speedShown = false
     var speedSeen = 1.0, speedAsked = 1.0, speedAskedUntil = Date.distantPast
@@ -1599,10 +1600,14 @@ final class BarView: NSView {
         shotBtn = PillButton(symbol("camera.viewfinder", 14), self, #selector(openScreenshot), width: 52)
         regularBtn = PillButton(symbol("rectangle.badge.xmark", 14), self, #selector(regularBar), width: 52)
         castBtn = PillButton(symbol("airplayaudio", 14), self, #selector(openCast), width: 52)
+        escBtn = PillButton(nil, self, #selector(pressEsc), width: 52)
+        escBtn.imagePosition = .noImage
+        escBtn.attributedTitle = NSAttributedString(string: "esc", attributes: [
+            .font: NSFont.systemFont(ofSize: 14, weight: .medium), .foregroundColor: NSColor.white])
         speedBtn = PillButton(nil, self, #selector(stepSpeed), width: 52)
         speedBtn.imagePosition = .noImage
         moreBtn = PillButton(symbol("chevron.left", 13, .bold), self, #selector(toggleStripExpanded), width: 34)
-        strip = Capsule([moreBtn, speedBtn, castBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
+        strip = Capsule([moreBtn, escBtn, speedBtn, castBtn, kbdBtn, siriBtn, shotBtn, regularBtn, briBtn, volBtn, appsBtn], spacing: 10)
         for (btn, panel) in [(briBtn!, Panel.brightness), (volBtn!, .volume), (kbdBtn!, .keyboard)] {
             let o = SlideOverlay()
             fill(o, in: btn)
@@ -2944,11 +2949,24 @@ final class BarView: NSView {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Screenshot.app"))
     }
     @objc func regularBar() { setStripExpanded(false); onRegularBar?() }
+    /// The Esc key, for Macs whose Touch Bar replaced it: sent to whichever app has the keyboard.
+    /// macOS only lets an app send keys with the Accessibility permission.
+    @objc func pressEsc() {
+        guard AXIsProcessTrusted() else {
+            ControlCenterSound.askPermission()
+            toast("Allow LyricsBar under Privacy & Security → Accessibility to send Esc", seconds: 4)
+            return
+        }
+        let src = CGEventSource(stateID: .hidSystemState)
+        for down in [true, false] {
+            CGEvent(keyboardEventSource: src, virtualKey: 53, keyDown: down)?.post(tap: .cghidEventTap)
+        }
+    }
 
     /// Extras show only while expanded (‹ / ›); they fold away again after a few seconds.
     var stripButtons: [String: NSView] {
         ["brightness": briBtn, "volume": volBtn, "library": appsBtn, "keyboard": kbdBtn, "siri": siriBtn,
-         "screenshot": shotBtn, "regular": regularBtn, "cast": castBtn, "speed": speedBtn]
+         "screenshot": shotBtn, "regular": regularBtn, "cast": castBtn, "speed": speedBtn, "esc": escBtn]
     }
     /// Lays the buttons out in the user's order; "Behind ‹" ones only show while expanded.
     func applyStripButtons() {
@@ -3328,6 +3346,7 @@ final class App: NSObject, NSApplicationDelegate, NSTouchBarDelegate {
                                    }
                                    return
                                }
+                               if c == "esc" { self.view.pressEsc(); return }      // presses the Esc button
                                if c.hasPrefix("speed") {                  // "speed": the button's state; "speed step" presses it; "speed only on|off"
                                    if c.contains("step") { self.view.stepSpeed() }
                                    if c.contains("only") { ConfigStore.shared.c.speedPodcastsOnly = !c.contains("off") }
