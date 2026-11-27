@@ -67,6 +67,15 @@ extension BarView {
     func askWhichPlayer(raw: [String: Any]) -> Bool {
         guard cfg.askWhichPlayer, !isPlaying, !(raw["playing"] as? Bool ?? false), !StreamPlayer.shared.isPlaying else { return false }
         let items = playCandidates(raw: raw)
+        if items.count == 1 {
+            // one thing was playing a moment ago. If the bar no longer shows it (a browser video that left the bar
+            // after it was paused), ▶ still means that one, not the queue or the default player.
+            let np = raw["title"] as? String ?? ""
+            let own = StreamPlayer.shared
+            let ownIsIt = own.active && own.tracks.indices.contains(own.index) && items[0].title == own.tracks[own.index].title
+            if !ownIsIt, !np.isEmpty, items[0].title == np, currentTitle != np { items[0].action?(); return true }
+            return false
+        }
         guard items.count > 1 else { return false }
         if mediaMode { setMediaMode(false) }
         if stripExpanded { setStripExpanded(false, restore: false) }

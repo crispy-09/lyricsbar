@@ -194,6 +194,8 @@ extension BarView {
                                              : "Spotify only changes speed for podcasts", seconds: 3)
             }
         } else {
+            // (the command goes to the system's Now Playing app: not this one while a browser holds that)
+            if systemState().held { toast("Can't change the speed while a browser is playing too", seconds: 3); return }
             // the system command (as media-control sends it) only takes whole speeds
             let v: Double = currentSpeed < 1.5 ? 2 : 1
             let key = speedFor

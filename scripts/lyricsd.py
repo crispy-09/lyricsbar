@@ -272,6 +272,9 @@ def _publish(p, last_art):
     import base64
     info = {"playing": bool(p.get("playing")), "title": p.get("title", ""), "artist": p.get("artist", ""),
             "album": p.get("album", ""), "bundle": p.get("bundleIdentifier", "")}
+    # a browser owns the system's Now Playing while this music app stays on the bar (see _stream): commands sent
+    # the usual way would reach the browser, so the app has to talk to the music app directly
+    info["held"] = bool(p.get("_held"))
     art_key = (info["title"], info["artist"])
     if art_key != last_art and not p.get("artworkData"):
         if os.path.exists(ART): os.remove(ART)   # new track, art not loaded yet
@@ -321,7 +324,7 @@ def _stream():
     thumbnail preview) in a browser would push the song off the bar. While Spotify or Music is playing,
     browser items are held back; the latest one is let through when the music stops. (LyricsBar's own player
     is handled by the app, which knows its player directly, and by now_playing() below for the lyrics.)"""
-    s = dict(key=None, art=None, timing=None, shown=("", False), held=None)
+    s = dict(key=None, art=None, timing=None, shown=("", False), held=None, last=None, btiming=None, misses=0)
     gate = threading.Lock()                      # events are handled one at a time (the stream and the watcher below)
     micros = True                                # exact timestamps; dropped if this media-control can't do them
 
@@ -333,7 +336,16 @@ def _stream():
         bundle, playing = s["shown"]
         # already holding: the watcher keeps checking; otherwise ask the app once
         if playing and bundle in MUSIC_APPS and (s["held"] is not None or player() is not None):
+            # a browser event without a position carries on from the browser's last one, not from the song's
+            s["btiming"] = _keep_times(p, s["btiming"])
+            first = s["held"] is None
             s["held"] = p
+            if first and s["last"]:              # tell the app: its commands must go to the music app directly
+                s["misses"] = 0
+                try:
+                    s["art"] = _publish(dict(s["last"], _held=True), s["art"])
+                except (ValueError, TypeError, OSError):
+                    pass
             return True
         s["held"] = None
         return False
@@ -345,6 +357,7 @@ def _stream():
         except (ValueError, TypeError, OSError):
             return                               # one odd event (or a failed write) must not restart the stream
         s["shown"] = (p.get("bundleIdentifier") or "", bool(p.get("playing")))
+        s["last"] = {k: v for k, v in p.items() if k != "artworkData"}     # (the cover is on disk already)
         if not p.get("title"):
             with _lock: _np["state"] = None
             s["key"] = None
@@ -387,10 +400,14 @@ def _stream():
                         continue
                     bundle, playing = s["shown"]
                     m = player() if playing and bundle in MUSIC_APPS else None
-                    if m is None:                            # the music stopped: the browser's turn
-                        s["held"] = None
-                        handle(p)
+                    if m is None:
+                        # one failed answer (a slow AppleScript) isn't "stopped": two in a row are
+                        s["misses"] += 1
+                        if s["misses"] >= 2 or not (playing and bundle in MUSIC_APPS):
+                            s["held"] = None                 # the music stopped: the browser's turn
+                            handle(p)
                         continue
+                    s["misses"] = 0
                     with _lock:
                         st = _np["state"]
                         est = st["position"] + (time.time() - _np["anchor"]) * st["rate"] if st else None
@@ -398,7 +415,7 @@ def _stream():
                     if not same:                             # next song, or a seek, that the feed didn't report
                         now = int(time.time() * 1e6)
                         handle({"title": m["track"], "artist": m["artist"], "album": m["album"], "bundleIdentifier": m["bundle"],
-                                "playing": True, "playbackRate": 1, "durationMicros": int(m["duration"] * 1e6),
+                                "playing": True, "playbackRate": 1, "_held": True, "durationMicros": int(m["duration"] * 1e6),
                                 "elapsedTimeMicros": int(m["position"] * 1e6), "timestampEpochMicros": now})
             except Exception as e:
                 note(f"held-back watcher: {type(e).__name__}")

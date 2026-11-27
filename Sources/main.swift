@@ -1171,14 +1171,16 @@ enum NowPlayingFilter {
     }
 }
 
-private var systemStateCache: (at: Date, value: (playing: Bool, bundle: String, title: String))?
-func systemState() -> (playing: Bool, bundle: String, title: String) {
+private var systemStateCache: (at: Date, value: (playing: Bool, bundle: String, title: String, held: Bool))?
+/// `held`: a browser owns the system's Now Playing while this music app stays on the bar (lyricsd's hold), so
+/// media-control would reach the browser, not the app shown.
+func systemState() -> (playing: Bool, bundle: String, title: String, held: Bool) {
     // called several times per tick: one read per 100 ms is plenty
     if let c = systemStateCache, Date().timeIntervalSince(c.at) < 0.1 { return c.value }
-    var v: (playing: Bool, bundle: String, title: String) = (false, "", "")
+    var v: (playing: Bool, bundle: String, title: String, held: Bool) = (false, "", "", false)
     if let d = FileManager.default.contents(atPath: home + "/state.json"),
        let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], !NowPlayingFilter.ignored(j) {
-        v = (j["playing"] as? Bool ?? false, j["bundle"] as? String ?? "", j["title"] as? String ?? "")
+        v = (j["playing"] as? Bool ?? false, j["bundle"] as? String ?? "", j["title"] as? String ?? "", j["held"] as? Bool ?? false)
     }
     systemStateCache = (Date(), v)
     return v
@@ -1237,6 +1239,19 @@ func transport(_ t: Transport) -> Bool {
     if systemState().title.isEmpty {               // nothing loaded anywhere
         if case .toggle = t { return startDefaultPlayer() }
         return true                                 // skip/seek with nothing loaded: do nothing (don't wake Music)
+    }
+    // Spotify or Music on the bar while a browser owns the system's Now Playing: the usual command would go to
+    // the browser (and could start its video), so the app is told directly
+    let st = systemState()
+    if st.held, let app = ["com.spotify.client": "Spotify", "com.apple.Music": "Music"][st.bundle] {
+        let tell = { (c: String) in run("/usr/bin/osascript", ["-e", "tell application \"\(app)\" to \(c)"]) }
+        switch t {
+        case .toggle: tell("playpause")
+        case .next: if !(app == "Spotify" && SpotifyQueue.shared.handleNext()) { tell("next track") }
+        case .previous: tell("previous track")
+        case .seek(let v): tell("set player position to \(String(format: "%.2f", v))")
+        }
+        return true
     }
     switch t {
     case .toggle: run(mediaControl, ["toggle-play-pause"])
